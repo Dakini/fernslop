@@ -71,3 +71,10 @@ Tests (in `backend/app/test_auth.py`, written per `_docs/testing-guidelines.md` 
 **Edge cases:** The name arrives percent-encoded UTF-8 and must be decoded. It is at most 40 characters after decoding; the 120-character schema limit applies to the encoded form. The spec doesn't define the response for a missing, blank or oversized header, so the PM should pick one (400 is suggested). Room creation and following a room do not need an actor.
 
 ## Comments
+
+### Engineer: implemented
+
+- `backend/app/auth.py`: `Actor(ApiModel)` with `device_id` and `name`, and `get_actor`, which declares both headers optional, checks the device id first, then decodes the name with `urllib.parse.unquote(..., errors="strict")` (no `+` handling), trims, and raises only `ApiError(400, ...)` with the exact messages from the criteria. Control characters are detected with `unicodedata.category == "Cc"`. No store access, no middleware, `main.py` and `errors.py` untouched. Docstring kept without the "issue 003" wording.
+- `backend/app/test_auth.py`: 47 tests on a throwaway `FastAPI()` app (with `register_error_handlers`) covering every happy-path and rejection bullet, both sides of the 40/41 and 64/65 boundaries, 40 emoji accepted, device id winning over a bad name, no `detail` key, dependency running before the route body, an opt-in route working with garbage headers, and a CORS preflight against `create_app()` plus a throwaway actor route.
+- `uv run pytest` in `backend/`: 104 passed, no skips or xfails. No dependency changes.
+- Note: a name that decodes to a control character plus surrounding whitespace only (for example `%0A`) is reported as "required" because trimming removes it first; `%00` and a control character inside the name give "contains invalid characters", as the criteria describe.
