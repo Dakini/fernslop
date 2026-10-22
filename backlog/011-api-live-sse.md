@@ -24,3 +24,5 @@
 **Edge cases:** It broadcasts on every mutation from 004 to 009, including undo, but not on follow or room creation. An unknown room returns 404 before the stream opens. Subscribers must be cleaned up on disconnect so they don't leak. Each room gets only its own events. Testing a stream with TestClient is awkward, so expose a way to inspect the broadcaster or keep the ping interval configurable for tests.
 
 ## Comments
+
+- Engineer: implemented `live.py` (per-stream subscriber with an `asyncio.Queue(maxsize=1)` and its loop under a `threading.Lock`; `notify` only calls `call_soon_threadsafe`; `subscriber_count`; `event_stream` async generator with `FERNSLOP_SSE_PING_SECONDS` pings) and `routers/live.py` (`subscribe`, 404 via `ApiError` before streaming, registered in `routers/__init__.py`). 5 tests in `backend/app/test_live.py`, all passing; the full suite passes except `test_store.py::test_transaction_does_not_roll_back_when_the_block_raises`, which comes from the in-progress SQLite store work (issue 015), not this change. No acceptance criteria changed.
