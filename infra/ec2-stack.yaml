@@ -147,6 +147,10 @@ Resources:
             app:
               image: ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/fernslop:latest
               env_file: .env
+              environment:
+                # Only Caddy (its fixed address below) may set the client IP with X-Forwarded-For;
+                # the per-IP rate limits and the access logs use it.
+                FORWARDED_ALLOW_IPS: 172.30.0.10
               depends_on:
                 db:
                   condition: service_healthy
@@ -163,10 +167,19 @@ Resources:
                 - ./Caddyfile:/etc/caddy/Caddyfile:ro
                 - caddy_data:/data
                 - caddy_config:/config
+              networks:
+                default:
+                  ipv4_address: 172.30.0.10
               depends_on:
                 - app
               logging: *logging
               restart: unless-stopped
+
+          networks:
+            default:
+              ipam:
+                config:
+                  - subnet: 172.30.0.0/24
 
           volumes:
             pgdata:
@@ -176,6 +189,8 @@ Resources:
 
           cat > Caddyfile <<'CADDY'
           {$SITE_ADDRESS} {
+              # Caddy trusts no proxy in front of it: it drops a client-sent X-Forwarded-For and
+              # sends the real peer address, which the app trusts from 172.30.0.10 only.
               # -1 flushes immediately, which the live SSE stream needs
               reverse_proxy app:8000 {
                   flush_interval -1

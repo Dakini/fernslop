@@ -16,6 +16,7 @@ from app.auth import Actor, get_actor
 from app.body import JsonBody
 from app.errors import ApiError
 from app.models import AreaInput, AreaPatch, FeedEvent, RestoreAreaPayload, RoomArea
+from app.rate_limit import WRITE, rate_limited
 from app.store import StoreProtocol, get_store
 
 router = APIRouter(tags=["Areas"])
@@ -78,7 +79,7 @@ def _update_text(before: RoomArea, after: RoomArea, changed: set[str]) -> str:
     return f'changed the area "{after.label}"'
 
 
-@router.post("/rooms/{room_id}/areas", operation_id="addArea", status_code=201)
+@router.post("/rooms/{room_id}/areas", operation_id="addArea", status_code=201, dependencies=[rate_limited(WRITE)])
 def add_area(
     room_id: str,
     raw: JsonBody,
@@ -104,7 +105,7 @@ def add_area(
     return area
 
 
-@router.patch("/areas/{area_id}", operation_id="updateArea")
+@router.patch("/areas/{area_id}", operation_id="updateArea", dependencies=[rate_limited(WRITE)])
 def update_area(
     area_id: str,
     raw: JsonBody,
@@ -132,7 +133,7 @@ def update_area(
     return after
 
 
-@router.delete("/areas/{area_id}", operation_id="deleteArea", status_code=204)
+@router.delete("/areas/{area_id}", operation_id="deleteArea", status_code=204, dependencies=[rate_limited(WRITE)])
 def delete_area(
     area_id: str,
     store: Annotated[StoreProtocol, Depends(get_store)],

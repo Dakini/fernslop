@@ -9,6 +9,7 @@ from app import live, timestamps
 from app.body import JsonBody
 from app.errors import ApiError
 from app.models import Room, RoomState, RoomSummary, RoomSummaryPlant
+from app.rate_limit import CREATE_ROOM, DELETE_ROOM, rate_limited
 from app.store import StoreProtocol, get_store
 from app.text import INVALID_CHARACTERS_MESSAGE, has_invalid_characters
 
@@ -58,7 +59,7 @@ def list_rooms(store: Annotated[StoreProtocol, Depends(get_store)]) -> list[Room
     return summaries
 
 
-@router.post("/rooms", operation_id="createRoom", status_code=201)
+@router.post("/rooms", operation_id="createRoom", status_code=201, dependencies=[rate_limited(CREATE_ROOM)])
 def create_room(raw: JsonBody, store: Annotated[StoreProtocol, Depends(get_store)]) -> Room:
     body = raw.object()
     name = body.get("name")
@@ -95,7 +96,7 @@ def get_room_state(room_id: str, store: Annotated[StoreProtocol, Depends(get_sto
     )
 
 
-@router.delete("/rooms/{room_id}", operation_id="deleteRoom", status_code=204)
+@router.delete("/rooms/{room_id}", operation_id="deleteRoom", status_code=204, dependencies=[rate_limited(DELETE_ROOM)])
 def delete_room(room_id: str, store: Annotated[StoreProtocol, Depends(get_store)]) -> Response:
     """Soft-delete the room: it disappears from the API but nothing is removed. Needs no actor headers.
 

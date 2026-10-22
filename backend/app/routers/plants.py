@@ -12,6 +12,7 @@ from app.identify import (
     get_identify_provider,
 )
 from app.models import IdentifyCandidate, Plant
+from app.rate_limit import IDENTIFY, rate_limited, read_upload_file
 from app.store import StoreProtocol, get_store
 from app.uploads import read_image_upload
 
@@ -39,9 +40,9 @@ def search_plants(store: Annotated[StoreProtocol, Depends(get_store)], q: str = 
     ]
 
 
-@router.post("/plants/identify", operation_id="identifyPlant")
+@router.post("/plants/identify", operation_id="identifyPlant", dependencies=[rate_limited(IDENTIFY)])
 def identify_plant(
-    file: UploadFile,
+    file: Annotated[UploadFile, Depends(read_upload_file)],
     provider: Annotated[IdentifyProvider, Depends(get_identify_provider)],
 ) -> list[IdentifyCandidate]:
     image = read_image_upload(file)

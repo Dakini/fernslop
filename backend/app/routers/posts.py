@@ -14,6 +14,7 @@ from app.auth import Actor, get_actor
 from app.body import JsonBody
 from app.errors import ApiError
 from app.models import FeedEvent
+from app.rate_limit import WRITE, rate_limited
 from app.store import StoreProtocol, get_store
 from app.text import (
     INVALID_CHARACTERS_MESSAGE,
@@ -44,7 +45,7 @@ def _photo_in_a_post(store: StoreProtocol, photo_url: str) -> bool:
     )
 
 
-@router.post("/rooms/{room_id}/posts", operation_id="postUpdate", status_code=201)
+@router.post("/rooms/{room_id}/posts", operation_id="postUpdate", status_code=201, dependencies=[rate_limited(WRITE)])
 def post_update(
     room_id: str,
     raw: JsonBody,

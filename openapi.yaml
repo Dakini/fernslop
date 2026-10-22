@@ -129,6 +129,8 @@ paths:
           $ref: "#/components/responses/JsonBodyTooLarge"
         "415":
           $ref: "#/components/responses/NotJson"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
 
   /rooms/{roomId}:
     get:
@@ -176,6 +178,8 @@ paths:
       responses:
         "204":
           description: The room is deleted (now, or already before).
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
 
   /plants:
     get:
@@ -265,6 +269,8 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
 
   /rooms/{roomId}/plants:
     post:
@@ -308,6 +314,8 @@ paths:
           $ref: "#/components/responses/JsonBodyTooLarge"
         "415":
           $ref: "#/components/responses/NotJson"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
 
   /room-plants/{roomPlantId}:
     patch:
@@ -344,6 +352,8 @@ paths:
           $ref: "#/components/responses/JsonBodyTooLarge"
         "415":
           $ref: "#/components/responses/NotJson"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
     delete:
       tags: [Room plants]
       operationId: removePlant
@@ -359,6 +369,8 @@ paths:
           description: Removed
         "404":
           $ref: "#/components/responses/RoomPlantGone"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
 
   /room-plants/{roomPlantId}/care:
     post:
@@ -402,6 +414,8 @@ paths:
           $ref: "#/components/responses/JsonBodyTooLarge"
         "415":
           $ref: "#/components/responses/NotJson"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
 
   /rooms/{roomId}/areas:
     post:
@@ -438,6 +452,8 @@ paths:
           $ref: "#/components/responses/JsonBodyTooLarge"
         "415":
           $ref: "#/components/responses/NotJson"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
 
   /areas/{areaId}:
     patch:
@@ -471,6 +487,8 @@ paths:
           $ref: "#/components/responses/JsonBodyTooLarge"
         "415":
           $ref: "#/components/responses/NotJson"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
     delete:
       tags: [Areas]
       operationId: deleteArea
@@ -486,6 +504,8 @@ paths:
           description: Removed
         "404":
           $ref: "#/components/responses/AreaNotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
 
   /rooms/{roomId}/posts:
     post:
@@ -538,6 +558,8 @@ paths:
           $ref: "#/components/responses/JsonBodyTooLarge"
         "415":
           $ref: "#/components/responses/NotJson"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
 
   /photos:
     post:
@@ -590,6 +612,8 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
 
   /photos/{photoId}:
     get:
@@ -664,6 +688,8 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
 
   /rooms/{roomId}/follows:
     post:
@@ -712,6 +738,8 @@ paths:
           $ref: "#/components/responses/JsonBodyTooLarge"
         "415":
           $ref: "#/components/responses/NotJson"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
 
   /follows/unsubscribe:
     post:
@@ -747,6 +775,8 @@ paths:
           $ref: "#/components/responses/JsonBodyTooLarge"
         "415":
           $ref: "#/components/responses/NotJson"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
 
   /rooms/{roomId}/live:
     get:
@@ -862,6 +892,21 @@ components:
         The body was not sent as `application/json` (for example `text/plain`, or no
         `Content-Type`). Parameters and case are ignored, so `application/json; charset=utf-8`
         is accepted. Nothing is written. Message is `Send the request body as application/json`.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+    TooManyRequests:
+      description: |
+        Too many writes from this client IP (an IPv6 client counts by its /64). Checked before
+        the body is read, and nothing is written. Each limit has its own bucket, per IP:
+        createRoom 10/hour, deleteRoom 10/hour, uploadPhoto 30/hour, identifyPlant 20/hour,
+        followRoom 10/hour, every other write 120/minute (the server can change these).
+        Message is `You're going a bit fast. Try again in N seconds.`
+      headers:
+        Retry-After:
+          description: Whole seconds until this client may try again.
+          schema: { type: integer, minimum: 1 }
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
