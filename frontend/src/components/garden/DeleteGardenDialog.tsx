@@ -58,13 +58,13 @@ export function DeleteGardenDialog({
       }}
     >
       <AlertDialogTrigger asChild>
-        <Button variant="outline" className="h-11">
+        <Button variant="outline" className="h-11 sm:h-9">
           <Trash2 /> Delete garden
         </Button>
       </AlertDialogTrigger>
       <AlertDialogContent className="w-[calc(100%-2rem)] rounded-3xl bg-cream">
         <AlertDialogHeader>
-          <AlertDialogTitle className="font-display text-2xl text-moss">
+          <AlertDialogTitle className="font-display text-2xl font-extrabold text-moss">
             Delete “{roomName}”?
           </AlertDialogTitle>
           <AlertDialogDescription>
