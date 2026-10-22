@@ -97,3 +97,55 @@ Tests
 **Software Engineer:** Implemented in `backend/` (acceptance criteria unchanged). uv project with only the approved dependencies (runtime: fastapi, uvicorn[standard], python-multipart; dev: pytest, httpx), `uv.lock` committed. `app/` has `main.py` (app factory + `app`, title/version, handlers, CORS, routers under `/api`, docs/openapi under `/api`), `models.py` (`ApiModel`, `Error`, `Timestamp`), `store.py` (`Store.reset()`, module-level `store`, `get_store()`), `auth.py` (docstring only), `errors.py` (`ApiError` plus handlers: validation -> 400 `<field>: <reason>`, bad JSON -> 400, Starlette HTTPException -> 404/405, unhandled -> 500 generic message), `timestamps.py` (`format_timestamp`, `now`), `routers/` (package with a `routers` list; `routers/health.py` serves `GET /api/health`, `include_in_schema=False`). CORS origins default to localhost/127.0.0.1 on 5173 and 8080 and are overridden by `FERNSLOP_CORS_ORIGINS`. `backend/conftest.py` has the autouse `reset_store` and `client` fixtures. Tests are in `app/test_main.py`, `app/test_errors.py`, `app/test_timestamps.py`: `uv run pytest` from `backend/` gives 57 passed, none skipped. Confirmed `uvicorn app.main:app` serves on 127.0.0.1:8000. `git status` shows no caches or `.venv` (root `.gitignore` covers them).
 
 Notes: (1) pytest prints one `StarletteDeprecationWarning` saying `httpx` with `starlette.testclient` is deprecated in favour of `httpx2`; `httpx` is the approved dependency so it was left alone, and a later issue may want to decide on `httpx2`. (2) The 500 response comes from Starlette's outermost error middleware, so it carries no CORS headers; a browser on a different origin would see a network error rather than the JSON body. Not covered by any criterion; flagging it for follow-up. (3) The 404/405 messages are fixed strings ("No such endpoint.", "Method not allowed.").
+
+## QA: PASS
+
+Verified against the running code in `backend/`, not the engineer's comment. Besides the test suite, I exercised the app myself with `TestClient` (extra throwaway routes added only in my scratch script, not in the repo) and with a real `uv run uvicorn app.main:app` plus `curl`.
+
+Project and tooling
+
+- [x] `backend/pyproject.toml` exists, `uv sync` succeeds, `uv.lock` is tracked (`git ls-files backend`), `requires-python = ">=3.12"` - PASS
+- [x] Runtime deps are exactly fastapi, uvicorn[standard], python-multipart; dev group is exactly pytest and httpx; nothing else - PASS (read `pyproject.toml`)
+- [x] `uv run pytest` from `backend/` exits 0, 57 passed, none skipped or xfailed (`grep skip|xfail` finds nothing) - PASS
+- [x] `uv run uvicorn app.main:app` starts on 127.0.0.1:8000; `curl http://127.0.0.1:8000/api/health` returned 200 `{"status":"ok"}` - PASS
+- [x] Caches, `.venv`, `.pytest_cache` untracked; `git status --short` clean, `git ls-files backend` lists only source files - PASS
+
+Layout
+
+- [x] `main.py` defines `app` with title `Fernslop API`, version `0.1.0`, registers error handlers, CORS and routers (`/api/openapi.json` reports both) - PASS
+- [x] `models.py` (`ApiModel`, `Error(message: str)`, `Timestamp`), `store.py` (`Store.reset()`, module-level `store`, `get_store()`, no data), `auth.py` (docstring only) import without error - PASS
+- [x] `routers/` is a package exposing a `routers` list included by `main.py`; only the health router is in it - PASS
+- [x] Everything is under `/api`; `GET /`, `/rooms`, `/health` return 404 - PASS
+
+Health check
+
+- [x] `GET /api/health` returns 200 `{"status":"ok"}`, is absent from the OpenAPI paths, and is the only endpoint - PASS
+
+Error shape
+
+- [x] `ApiError(status_code, message)` returns that status with `{"message": ...}` (checked 409 and 422) - PASS
+- [x] Validation failures return 400, not 422: missing body field gave `name: Field required`; wrong type gave `n: Input should be a valid integer, ...`; missing and bad query param gave `limit: ...`; malformed JSON gave 400 `Request body is not valid JSON.`; `ApiError(422, ...)` still yields 422 - PASS
+- [x] `GET /api/nope` returns 404 `{"message":"No such endpoint."}`; `POST /api/health` returns 405 `{"message":"Method not allowed."}`; no `detail` key - PASS
+- [x] Unhandled `RuntimeError` in a route returns 500 `{"message":"Something went wrong. Please try again."}` with no traceback or exception text in the body (`raise_server_exceptions=False`) - PASS
+- [x] Every error message is a non-empty string (all error responses above) - PASS
+
+Timestamps
+
+- [x] `format_timestamp` / `now` exist: zero ms gives `2026-10-22T09:30:00.000Z`; `.123456` gives `.123Z`; `.999999` gives `.999Z` (truncated); `+02:00` converted to UTC; naive datetime raises `ValueError`; `now()` is aware UTC - PASS
+- [x] `Timestamp` serialises through `format_timestamp` in JSON: `.123456` gives `"2026-10-22T09:30:00.123Z"`, zero microseconds gives `"...00.000Z"`, `+02:00` gives UTC - PASS
+- [x] Formatted values sort lexicographically in chronological order (500 random values spanning a second boundary, 1 ms steps) - PASS
+
+CORS
+
+- [x] Origins `http://localhost:5173`, `:8080` and the `127.0.0.1` equivalents get `Access-Control-Allow-Origin` echoing the origin; preflight (`POST`, `content-type,x-device-id,x-actor-name`) returns 200 with methods `GET, POST, PATCH, DELETE` and those headers allowed; `https://evil.example` gets no allow-origin header (preflight 400) - PASS
+- [x] `FERNSLOP_CORS_ORIGINS="https://a.example, https://b.example"` allows those two and no longer allows `localhost:5173`; defaults apply when unset; no `*` anywhere - PASS
+
+Tests
+
+- [x] `backend/conftest.py` has autouse function-scoped `reset_store` (reset before and after) and `client` fixture building `TestClient(app)` after the reset; both used by the tests - PASS
+- [x] `app/test_main.py`, `app/test_errors.py`, `app/test_timestamps.py` exist and cover health, 404/405, 400 field/reason, malformed JSON, no-422, 500 without traceback, CORS allowed/preflight/rejected, env override, timestamp format cases and ordering, and store reset between two tests - PASS
+- [x] `GET /api/openapi.json` and `GET /api/docs` return 200; `GET /openapi.json` and `GET /docs` return 404 - PASS
+
+Tests: `cd backend && uv run pytest`, 57 passed, 0 failed, 0 skipped (1 StarletteDeprecationWarning about `httpx` vs `httpx2`, not a criterion).
+
+Not covered by any criterion (informational): the 500 response is produced by Starlette's outermost error middleware, so it carries no CORS headers (as the engineer also noted).
