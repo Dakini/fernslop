@@ -1,4 +1,20 @@
 # [api] Undo feed events
+## Goal
+`POST /api/feed-events/{eventId}/undo` behaves as `openapi.yaml` defines (`undoEvent`, `UndoPayload`), applying the payloads written by [#006](006-api-room-plants.md) and [#007](007-api-areas.md).
+## Acceptance criteria
+- [ ] Success returns 204 with an empty body. The event gets `undone_at` = now but keeps its `undo_payload`, stays in the room feed, and no new event is written. The room's `last_activity_at` equals `undone_at`, and `live.notify(room_id)` is called once, after the transaction ends.
+- [ ] `restore_plant` writes the `room_plant` snapshot back as-is, clearing `deleted_at`: a removed plant reappears in `GET /api/rooms/{id}`, and a moved or cared-for plant returns to its old position/timestamps, even after newer edits.
+- [ ] `delete_plant` soft-deletes the plant, and `restore_area` with `area: null` soft-deletes the area; both leave the room state. If the target is already soft-deleted, it stays deleted (original `deleted_at` kept) and the call still returns 204.
+- [ ] `restore_area` with an area writes it back exactly (an area removed or edited is restored, and `deleted_at` is cleared).
+- [ ] An event with no payload (a post) gives 409 `This can't be undone`; undoing twice gives 409 `Already undone`. Bringing back a soft-deleted plant into a room with 50 live plants gives 409 `This garden is full (50 plants max)`, and an area with 10 live areas gives `This garden has the maximum 10 areas`; undoing a move or care on a still-live plant is never blocked.
+- [ ] An unknown or non-UUID event id gives 404 `Event not found`; missing or malformed actor headers give 400, never 422. Every 4xx/409 changes nothing (plants, areas, feed, `undone_at` null, `last_activity_at`) and does not call `live.notify`.
+- [ ] `uv run pytest` passes, with tests per criterion using a fresh `Store` via `app.dependency_overrides[get_store]`, `live.notify` patched, and events created through the real 006/007 endpoints.
+## Out of scope
+- Making `notify` push to browsers: [#011](011-api-live-sse.md). Recording who undid an event, or redo: not in the spec. Frontend wiring: [#014](014-api-frontend-wiring.md).
+## Constraints
+- Implement after [#006](006-api-room-plants.md) (creates `backend/app/live.py`) and [#007](007-api-areas.md). Code in `backend/app/routers/feed_events.py` (registered in `routers/__init__.py`), tests in `backend/app/test_feed_events.py`. Use `Depends(get_store)` and `Depends(get_actor)`; do all checks and writes in one `store.transaction()`; reuse the 50/10 limit constants and messages from the 006/007 routers; times from `timestamps.now()`. No new dependencies; follow `_docs/testing-guidelines.md`.
+## Original request
 **What:** `POST /feed-events/{eventId}/undo` applies the event's `undo_payload` (`restore_plant`, `delete_plant` or `restore_area`) and sets `undone_at`. It writes no new feed event.
 **Why:** The feed's undo button depends on it. It relies on the payloads written in 006 and 007.
 **Edge cases:** An event with no payload (a post) returns 409 `This can't be undone`. Undoing twice returns 409 `Already undone`. Restoring a plant or area into a room that is at its limit returns 409 with the same messages as add. On any 409 nothing changes and `undone_at` stays null, so the operation must be atomic. An unknown event returns 404. Undoing an older event after newer edits writes the old snapshot back as-is, which is the spec's behaviour. Undo still requires the actor headers, and it bumps `last_activity_at` and the live stream.
+## Comments
