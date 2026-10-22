@@ -6,8 +6,9 @@ To add a router, create a module in this package and add its ``router`` to
 
 from fastapi import APIRouter
 
-from app.routers import health
+from app.routers import health, plants
 
 routers: list[APIRouter] = [
     health.router,
+    plants.router,
 ]

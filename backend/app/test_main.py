@@ -58,12 +58,6 @@ def test_paths_without_the_api_prefix_are_not_served(client, path):
 # --- Generated docs ----------------------------------------------------------
 
 
-def test_openapi_json_lists_no_paths_until_routes_are_added(client):
-    response = client.get("/api/openapi.json")
-
-    assert response.json()["paths"] == {}
-
-
 def test_openapi_json_is_served_under_the_api_prefix(client):
     response = client.get("/api/openapi.json")
 

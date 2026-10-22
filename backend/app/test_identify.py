@@ -1,0 +1,254 @@
+import io
+
+import pytest
+
+from app.identify import (
+    IdentifyError,
+    StubIdentifyProvider,
+    get_identify_provider,
+)
+from app.main import app
+from app.models import IdentifyCandidate
+from app.store import store
+from app.uploads import ValidatedImage
+
+JPEG_HEAD = b"\xff\xd8\xff\xe0"
+PNG_HEAD = b"\x89PNG\r\n\x1a\n"
+
+
+def jpeg_bytes(size=1234):
+    return JPEG_HEAD + b"\x00" * (size - len(JPEG_HEAD))
+
+
+def post_photo(client, data=None, filename="tomato.jpg", content_type="image/jpeg"):
+    data = jpeg_bytes() if data is None else data
+    return client.post("/api/plants/identify", files={"file": (filename, io.BytesIO(data), content_type)})
+
+
+def candidate(plant_id, confidence):
+    plant = next(p for p in store.list_plants() if p.id == plant_id)
+    return IdentifyCandidate(plant=plant, confidence=confidence)
+
+
+class FakeProvider:
+    def __init__(self, result=None, error=None):
+        self.result = result
+        self.error = error
+        self.calls = []
+
+    def identify(self, image):
+        self.calls.append(image)
+        if self.error:
+            raise self.error
+        return self.result
+
+
+@pytest.fixture
+def use_provider():
+    def install(provider):
+        app.dependency_overrides[get_identify_provider] = lambda: provider
+        return provider
+
+    yield install
+    app.dependency_overrides.pop(get_identify_provider, None)
+
+
+# --- Stub provider -----------------------------------------------------------
+
+
+def test_stub_for_tomato_jpg_of_1234_bytes_picks_daffodil_cosmos_and_fiddle_leaf_fig(client):
+    # Worked out by hand: h = fold(h * 31 + code unit) mod 2^32 over "tomato.jpg1234" = 3325661631.
+    # 3325661631 mod 51 = 30, so the picks are table rows 30, 37 and 44.
+    response = post_photo(client, jpeg_bytes(1234), filename="tomato.jpg")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [c["plant"]["id"] for c in body] == ["plant-daffodil", "plant-cosmos", "plant-fiddle-leaf-fig"]
+    assert [c["confidence"] for c in body] == [0.82, 0.11, 0.04]
+
+
+def test_stub_gives_the_same_answer_for_the_same_upload_twice(client):
+    first = post_photo(client).json()
+
+    second = post_photo(client).json()
+
+    assert first == second
+
+
+def test_stub_returns_full_plant_objects(client):
+    candidate_ = post_photo(client).json()[0]
+
+    assert candidate_["plant"] == store.get_plant(candidate_["plant"]["id"]).model_dump(mode="json")
+
+
+def test_stub_divides_confidences_by_four_when_filename_contains_blurry_in_any_case(client):
+    response = post_photo(client, filename="My-BLURRY-fern.jpg")
+
+    assert [c["confidence"] for c in response.json()] == [0.82 / 4, 0.11 / 4, 0.04 / 4]
+
+
+def test_stub_hashes_utf16_code_units_so_astral_characters_count_as_two():
+    # "🌿" is the surrogate pair D83C DF3F in UTF-16. Hash "🌿" + "5" by hand over those units.
+    h = 0
+    for unit in (0xD83C, 0xDF3F, ord("5")):
+        h = (h * 31 + unit) % 2**32
+    plants = store.list_plants()
+    image = ValidatedImage(data=JPEG_HEAD + b"\x00", content_type="image/jpeg", filename="🌿")
+
+    result = StubIdentifyProvider(plants).identify(image)
+
+    assert [c.plant.id for c in result] == [plants[(h + i * 7) % 51].id for i in range(3)]
+
+
+def test_stub_treats_a_missing_filename_as_empty():
+    plants = store.list_plants()
+    image = ValidatedImage(data=JPEG_HEAD + b"\x00", content_type="image/jpeg", filename=None)
+    named = ValidatedImage(data=JPEG_HEAD + b"\x00", content_type="image/jpeg", filename="")
+
+    provider = StubIdentifyProvider(plants)
+
+    assert provider.identify(image) == provider.identify(named)
+
+
+def test_stub_hash_is_pinned_for_empty_filename_and_a_one_digit_size():
+    # h("" + "5") = ord("5") = 53; 53 mod 51 = 2, so rows 2, 9 and 16.
+    plants = store.list_plants()
+    image = ValidatedImage(data=b"12345", content_type="image/jpeg", filename=None)
+
+    result = StubIdentifyProvider(plants).identify(image)
+
+    assert [c.plant.id for c in result] == [plants[2].id, plants[9].id, plants[16].id]
+
+
+def test_default_provider_is_the_stub(client):
+    provider = get_identify_provider(store)
+
+    assert isinstance(provider, StubIdentifyProvider)
+
+
+# --- Results --------------------------------------------------------------
+
+
+def test_unsorted_provider_results_are_sorted_by_confidence_descending(client, use_provider):
+    use_provider(FakeProvider([candidate("plant-rose", 0.1), candidate("plant-mint", 0.7), candidate("plant-kale", 0.3)]))
+
+    response = post_photo(client)
+
+    assert [c["plant"]["id"] for c in response.json()] == ["plant-mint", "plant-kale", "plant-rose"]
+
+
+def test_provider_returning_more_than_three_candidates_is_cut_to_the_best_three(client, use_provider):
+    ids = ["plant-rose", "plant-mint", "plant-kale", "plant-pea"]
+    use_provider(FakeProvider([candidate(i, c) for i, c in zip(ids, [0.1, 0.2, 0.3, 0.4])]))
+
+    response = post_photo(client)
+
+    assert [c["plant"]["id"] for c in response.json()] == ["plant-pea", "plant-kale", "plant-mint"]
+
+
+def test_empty_provider_result_is_200_with_empty_list(client, use_provider):
+    use_provider(FakeProvider([]))
+
+    response = post_photo(client)
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_provider_receives_the_validated_upload(client, use_provider):
+    provider = use_provider(FakeProvider([]))
+
+    post_photo(client, jpeg_bytes(100), filename="fern.jpg")
+
+    assert provider.calls[0].data == jpeg_bytes(100)
+    assert provider.calls[0].filename == "fern.jpg"
+    assert provider.calls[0].content_type == "image/jpeg"
+
+
+# --- Failures ----------------------------------------------------------------
+
+
+def test_identify_error_from_provider_is_502_with_the_spec_message(client, use_provider):
+    use_provider(FakeProvider(error=IdentifyError("upstream down")))
+
+    response = post_photo(client)
+
+    assert response.status_code == 502
+    assert response.json() == {"message": "We couldn't identify that photo — try again"}
+
+
+def test_any_other_provider_exception_is_a_500(use_provider):
+    from fastapi.testclient import TestClient
+
+    use_provider(FakeProvider(error=RuntimeError("boom")))
+    # raise_server_exceptions=False so the 500 handler's response is returned instead of re-raised.
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = post_photo(client)
+
+    assert response.status_code == 500
+    assert response.json() == {"message": "Something went wrong. Please try again."}
+
+
+# --- Upload validation (through the shared module) -----------------------------------
+
+
+def test_missing_file_field_is_400(client):
+    response = client.post("/api/plants/identify", data={"other": "x"})
+
+    assert response.status_code == 400
+    assert response.json() == {"message": "file: Field required"}
+
+
+def test_non_image_declared_type_is_415(client):
+    response = post_photo(client, b"hello", filename="a.txt", content_type="text/plain")
+
+    assert response.status_code == 415
+    assert response.json() == {"message": "Please use a JPG, PNG or WebP image"}
+
+
+def test_png_declared_as_jpeg_is_415(client):
+    response = post_photo(client, PNG_HEAD + b"data", content_type="image/jpeg")
+
+    assert response.status_code == 415
+
+
+def test_empty_file_is_415(client):
+    response = post_photo(client, b"")
+
+    assert response.status_code == 415
+
+
+def test_file_of_5_mib_plus_one_byte_is_413(client):
+    response = post_photo(client, jpeg_bytes(5 * 1024 * 1024 + 1))
+
+    assert response.status_code == 413
+    assert response.json() == {"message": "That photo is over 5 MB"}
+
+
+def test_file_of_exactly_5_mib_is_accepted(client):
+    response = post_photo(client, jpeg_bytes(5 * 1024 * 1024))
+
+    assert response.status_code == 200
+
+
+def test_identify_only_reads_plants_from_the_store(client):
+    from app.store import get_store
+
+    class RecordingStore:
+        def __init__(self):
+            self.calls = []
+
+        def __getattr__(self, name):
+            self.calls.append(name)
+            return getattr(store, name)
+
+    recording = RecordingStore()
+    app.dependency_overrides[get_store] = lambda: recording
+    try:
+        response = post_photo(client)
+    finally:
+        app.dependency_overrides.pop(get_store, None)
+
+    assert response.status_code == 200
+    assert set(recording.calls) == {"list_plants"}

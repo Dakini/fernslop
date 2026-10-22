@@ -161,3 +161,10 @@ class StoredPhoto(ApiModel):
     content_type: str
     created_at: Timestamp
     data: bytes
+
+
+class IdentifyCandidate(ApiModel):
+    """One possible match for an identified photo."""
+
+    plant: Plant
+    confidence: Annotated[float, Field(ge=0, le=1)]
