@@ -1,0 +1,19 @@
+[project]
+name = "e2e"
+version = "0.1.0"
+description = "End-to-end tests that drive the docker-compose stack in a real browser"
+requires-python = ">=3.12"
+dependencies = [
+    # Pinned to match the Chromium already installed in ~/Library/Caches/ms-playwright
+    # (same pin as .claude/skills/design-check).
+    "playwright==1.63.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["."]
+python_files = ["test_*.py"]
