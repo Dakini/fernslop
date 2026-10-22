@@ -54,6 +54,7 @@ from app.models import (
     RoomPlant,
     StoredFollow,
     StoredPhoto,
+    StoredRoom,
 )
 from app.seed import build_seed
 
@@ -262,24 +263,72 @@ class SqlStore:
 
     # --- Rooms ------------------------------------------------------------------
 
+    def _stored_rooms(self, *where) -> list[StoredRoom]:
+        """Every stored room, live and soft-deleted. The one place that reads room rows."""
+        return self._many(StoredRoom, _rooms, *where)
+
+    def _live_rooms(self, *where) -> list[Room]:
+        """The one place soft-deleted rooms are filtered out: routers only ever see these."""
+        return [
+            Room.model_validate(room.model_dump(exclude={"deleted_at"}))
+            for room in self._stored_rooms(*where)
+            if room.deleted_at is None
+        ]
+
     def list_rooms(self) -> list[Room]:
-        return self._many(Room, _rooms)
+        return self._live_rooms()
 
     def get_room(self, room_id: str) -> Room | None:
-        return self._one(Room, _rooms, _rooms.c.id == room_id)
+        rooms = self._live_rooms(_rooms.c.id == room_id)
+        return rooms[0] if rooms else None
 
     def save_room(self, room: Room) -> None:
         self._save(_rooms, room)
 
-    def delete_room(self, room_id: str) -> bool:
-        """Hard-delete a room with its plants, areas, feed events and follows, in one transaction.
+    def delete_room(self, room_id: str, deleted_at: datetime) -> bool:
+        """Soft-delete a live room: set its ``deleted_at`` and keep everything else.
+
+        Returns whether this call marked it (``False`` for an unknown or already deleted room).
+        """
+        with self._tx():
+            room = self.get_room(room_id)
+            if room is None:
+                return False
+            self._save(_rooms, StoredRoom(**room.model_dump(), deleted_at=deleted_at))
+            return True
+
+    # Not part of ``StoreProtocol``: only the purge and restore commands use these.
+
+    def list_deleted_rooms(self) -> list[StoredRoom]:
+        """Soft-deleted rooms, oldest deletion first."""
+        deleted = [room for room in self._stored_rooms() if room.deleted_at is not None]
+        return sorted(deleted, key=lambda room: room.deleted_at)  # type: ignore[arg-type, return-value]
+
+    def restore_room(self, room_id: str) -> bool:
+        """Clear a soft-deleted room's ``deleted_at``. Returns ``False`` for an unknown, live or purged id."""
+        with self._tx():
+            rooms = self._stored_rooms(_rooms.c.id == room_id)
+            if not rooms or rooms[0].deleted_at is None:
+                return False
+            self._save(_rooms, rooms[0].model_copy(update={"deleted_at": None}))
+            return True
+
+    def purge_deleted_rooms(self, deleted_before: datetime) -> int:
+        """Hard-delete every room soft-deleted before ``deleted_before``, in one transaction. Returns how many."""
+        with self._tx():
+            due = [room.id for room in self.list_deleted_rooms() if room.deleted_at < deleted_before]  # type: ignore[operator]
+            for room_id in due:
+                self._hard_delete_room(room_id)
+            return len(due)
+
+    def _hard_delete_room(self, room_id: str) -> None:
+        """Remove a room with its plants, areas, feed events and follows.
 
         Photos that only this room's feed events point at go too; a photo another room's event also
-        points at, or one no event points at, stays. Returns whether the room existed.
+        points at, or one no event points at, stays.
         """
         with self._tx() as conn:
-            if conn.execute(delete(_rooms).where(_rooms.c.id == room_id)).rowcount == 0:
-                return False
+            conn.execute(delete(_rooms).where(_rooms.c.id == room_id))
             photo_urls = (
                 conn.execute(
                     select(_feed_events.c.photo_url).where(
@@ -294,7 +343,6 @@ class SqlStore:
             if photo_urls:
                 still_used = exists().where(_feed_events.c.photo_url == _photos.c.url)
                 conn.execute(delete(_photos).where(_photos.c.url.in_(set(photo_urls)), ~still_used))
-            return True
 
     # --- Room plants ------------------------------------------------------------
 

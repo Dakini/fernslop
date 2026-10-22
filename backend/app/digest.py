@@ -65,7 +65,10 @@ def public_url() -> str:
 
 
 def build_digests(store: StoreProtocol, now: datetime) -> list[Digest]:
-    """One digest per follow of each room with a not-undone feed event in the 7 days up to ``now``."""
+    """One digest per follow of each room with a not-undone feed event in the 7 days up to ``now``.
+
+    Soft-deleted rooms get none: ``list_rooms`` leaves them out.
+    """
     since = now - DIGEST_WINDOW
     base = public_url()
     digests: list[Digest] = []

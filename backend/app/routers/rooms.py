@@ -97,14 +97,15 @@ def get_room_state(room_id: str, store: Annotated[StoreProtocol, Depends(get_sto
 
 @router.delete("/rooms/{room_id}", operation_id="deleteRoom", status_code=204)
 def delete_room(room_id: str, store: Annotated[StoreProtocol, Depends(get_store)]) -> Response:
-    """Hard-delete the room and everything in it. Needs no actor headers.
+    """Soft-delete the room: it disappears from the API but nothing is removed. Needs no actor headers.
 
-    Idempotent: a room that is already gone (or never existed, or has a non-UUID id) answers 204
-    too, with nothing changed. Of several deletes at once exactly one removes data (the store
-    transaction is exclusive) and only that one closes the live streams.
+    ``app.room_purge`` removes it for good after 7 days; until then an operator can bring it back
+    with ``app.room_restore``. Idempotent: a room that is already deleted (or never existed, or has
+    a non-UUID id) answers 204 too, with nothing changed. Of several deletes at once exactly one
+    marks the room (the store transaction is exclusive) and only that one closes the live streams.
     """
     with store.transaction():
-        deleted = store.delete_room(room_id)
+        deleted = store.delete_room(room_id, timestamps.now())
     if deleted:
-        live.close_room(room_id)  # only now that the delete has committed
+        live.close_room(room_id)  # only now that the mark has committed
     return Response(status_code=204)

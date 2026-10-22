@@ -5,6 +5,11 @@ Routers reach data only through the methods of ``StoreProtocol``; ``SqlStore``
 found" and never enforces room limits or business rules: lookups return ``None``
 or an empty list, and routers decide the status code.
 
+Rooms are soft-deleted (#196): ``delete_room`` sets ``deleted_at``, and from then on
+``get_room`` and ``list_rooms`` act as if the room did not exist, so every room call
+404s through the router's usual check. ``app.room_purge`` removes such rooms for good
+after 7 days and ``app.room_restore`` brings one back before then.
+
 Configuration: the database is the SQLAlchemy URL in the environment variable
 ``FERNSLOP_DATABASE_URL``. Unset, it is ``sqlite:///fernslop.db`` (a file in the
 working directory, created on first use and ignored by git), so data survives
@@ -15,6 +20,7 @@ restarts. Example for another database: ``postgresql+psycopg://user:pw@host/db``
 import os
 import threading
 from contextlib import AbstractContextManager
+from datetime import datetime
 from typing import Protocol, runtime_checkable
 
 from app.models import (
@@ -41,7 +47,7 @@ class StoreProtocol(Protocol):
     def list_rooms(self) -> list[Room]: ...
     def get_room(self, room_id: str) -> Room | None: ...
     def save_room(self, room: Room) -> None: ...
-    def delete_room(self, room_id: str) -> bool: ...
+    def delete_room(self, room_id: str, deleted_at: datetime) -> bool: ...
 
     # Room plants
     def list_room_plants(self, room_id: str, *, include_deleted: bool = False) -> list[RoomPlant]: ...
