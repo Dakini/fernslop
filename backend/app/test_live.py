@@ -1,9 +1,11 @@
 import asyncio
 import contextlib
+import io
 import threading
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from app import live
 from app.main import app
@@ -177,7 +179,9 @@ def test_each_successful_mutation_gives_one_change_and_other_requests_give_none(
     room_id, other_id = room_ids(store)
     tomato = next(p.id for p in store.list_plants() if p.common_name == "Tomato")
     plant = next(rp for rp in store.list_room_plants(room_id) if rp.plant_id == tomato)
-    jpeg = b"\xff\xd8\xff\xe0" + b"jpeg-body"
+    jpeg = io.BytesIO()
+    Image.new("RGB", (2, 2)).save(jpeg, "JPEG")
+    jpeg = jpeg.getvalue()
 
     def quiet_requests():
         api.post("/api/rooms", json={"name": "New"})
