@@ -26,3 +26,11 @@
 **Edge cases:** A failing or timed-out upstream returns 502. Results that don't match any reference plant are dropped. The key must never reach the client.
 
 ## Comments
+
+### Engineer
+Implemented all criteria in `backend/app/identify.py` and `test_identify.py` (no other files, no new dependencies).
+- `get_identify_provider()` reads `FERNSLOP_IDENTIFY_PROVIDER` / `FERNSLOP_IDENTIFY_API_KEY` per call; only `plantnet` plus a non-blank key returns `PlantNetIdentifyProvider`, everything else the stub.
+- `PlantNetIdentifyProvider(plants, api_key, client=None)` does one sync multipart POST (`images`, `organs=auto`, `api-key` query, 10 s timeout); an injected `httpx.Client` is used in tests via `MockTransport`.
+- Mapping by trimmed, case-insensitive scientific name; unmatched or malformed items (including a score outside 0..1) are dropped, duplicates keep the highest score.
+- All failures and WebP uploads raise `IdentifyError` `from None`. httpx logs the full request URL at INFO, so a log filter on the `httpx`/`httpcore` loggers redacts `api-key=` values; a test checks `caplog` at DEBUG.
+- `uv run pytest` in `backend/`: 683 passed, nothing skipped or xfailed.

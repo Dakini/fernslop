@@ -1,9 +1,13 @@
 import io
+import logging
 
+import httpx
 import pytest
 
 from app.identify import (
+    PLANTNET_URL,
     IdentifyError,
+    PlantNetIdentifyProvider,
     StubIdentifyProvider,
     get_identify_provider,
 )
@@ -252,3 +256,267 @@ def test_identify_only_reads_plants_from_the_store(client):
 
     assert response.status_code == 200
     assert set(recording.calls) == {"list_plants"}
+
+
+# --- Pl@ntNet provider ---------------------------------------------------------
+
+API_KEY = "sekrit-key-123"
+
+
+def plantnet(handler, key=API_KEY):
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    return PlantNetIdentifyProvider(store.list_plants(), key, client=client)
+
+
+def respond(body, status=200):
+    return lambda request: httpx.Response(status, json=body)
+
+
+def hit(name, score):
+    return {"score": score, "species": {"scientificNameWithoutAuthor": name}}
+
+
+def jpeg_image(filename="fern.jpg"):
+    return ValidatedImage(data=jpeg_bytes(50), content_type="image/jpeg", filename=filename)
+
+
+def test_plantnet_request_is_one_post_to_the_identify_url_with_api_key_query():
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json={"results": []})
+
+    plantnet(handler).identify(jpeg_image())
+
+    assert len(seen) == 1
+    assert seen[0].method == "POST"
+    assert seen[0].url.copy_with(query=None) == httpx.URL(PLANTNET_URL)
+    assert seen[0].url.params["api-key"] == API_KEY
+
+
+def test_plantnet_request_is_multipart_with_images_file_part_and_organs_auto():
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json={"results": []})
+    image = ValidatedImage(data=PNG_HEAD + b"pixels", content_type="image/png", filename="leaf.png")
+
+    plantnet(handler).identify(image)
+
+    body = seen[0].read()
+    assert seen[0].headers["content-type"].startswith("multipart/form-data")
+    assert b'name="images"; filename="leaf.png"' in body
+    assert b"Content-Type: image/png" in body
+    assert PNG_HEAD + b"pixels" in body
+    assert b'name="organs"' in body
+    assert b"\r\n\r\nauto\r\n" in body
+
+
+def test_plantnet_request_has_a_10_second_timeout():
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json={"results": []})
+
+    plantnet(handler).identify(jpeg_image())
+
+    assert seen[0].extensions["timeout"] == {"connect": 10, "read": 10, "write": 10, "pool": 10}
+
+
+def test_plantnet_maps_a_result_to_the_reference_plant_with_score_as_confidence():
+    provider = plantnet(respond({"results": [hit("Ocimum basilicum", 0.73)]}))
+
+    result = provider.identify(jpeg_image())
+
+    assert [(c.plant.id, c.confidence) for c in result] == [("plant-basil", 0.73)]
+
+
+def test_plantnet_matches_scientific_name_trimmed_and_case_insensitively():
+    provider = plantnet(respond({"results": [hit("  MENTHA spicata ", 0.5)]}))
+
+    result = provider.identify(jpeg_image())
+
+    assert [c.plant.id for c in result] == ["plant-mint"]
+
+
+def test_plantnet_drops_results_that_match_no_reference_plant():
+    provider = plantnet(respond({"results": [hit("Nonexistus plantus", 0.9), hit("Ocimum basilicum", 0.1)]}))
+
+    result = provider.identify(jpeg_image())
+
+    assert [c.plant.id for c in result] == ["plant-basil"]
+
+
+def test_plantnet_keeps_the_highest_score_when_a_plant_is_matched_twice():
+    provider = plantnet(respond({"results": [hit("Ocimum basilicum", 0.2), hit("ocimum basilicum", 0.6), hit("Ocimum basilicum", 0.4)]}))
+
+    result = provider.identify(jpeg_image())
+
+    assert [(c.plant.id, c.confidence) for c in result] == [("plant-basil", 0.6)]
+
+
+def test_plantnet_with_no_match_returns_an_empty_list_and_the_route_is_200(client, use_provider):
+    use_provider(plantnet(respond({"results": [hit("Nonexistus plantus", 0.9)]})))
+
+    response = post_photo(client)
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_plantnet_with_empty_results_returns_an_empty_list():
+    assert plantnet(respond({"results": []})).identify(jpeg_image()) == []
+
+
+def test_plantnet_ignores_malformed_result_items_and_out_of_range_scores():
+    results = [{"species": {}}, "junk", hit("Mentha spicata", 7), hit("Ocimum basilicum", 0.3)]
+
+    result = plantnet(respond({"results": results})).identify(jpeg_image())
+
+    assert [c.plant.id for c in result] == ["plant-basil"]
+
+
+def test_plantnet_results_flow_through_the_route_best_three_first(client, use_provider):
+    names = ["Ocimum basilicum", "Mentha spicata", "Salvia rosmarinus", "Thymus vulgaris"]
+    use_provider(plantnet(respond({"results": [hit(n, s) for n, s in zip(names, [0.1, 0.4, 0.3, 0.2])]})))
+
+    response = post_photo(client)
+
+    assert [c["plant"]["id"] for c in response.json()] == ["plant-mint", "plant-rosemary", "plant-thyme"]
+
+
+def test_plantnet_timeout_raises_identify_error():
+    def handler(request):
+        raise httpx.ReadTimeout("slow", request=request)
+
+    with pytest.raises(IdentifyError):
+        plantnet(handler).identify(jpeg_image())
+
+
+def test_plantnet_connection_error_raises_identify_error():
+    def handler(request):
+        raise httpx.ConnectError("refused", request=request)
+
+    with pytest.raises(IdentifyError):
+        plantnet(handler).identify(jpeg_image())
+
+
+@pytest.mark.parametrize("status", [300, 301, 400, 401, 404, 429, 500, 503])
+def test_plantnet_non_2xx_status_raises_identify_error(status):
+    provider = plantnet(respond({"results": [hit("Ocimum basilicum", 0.5)]}, status=status))
+
+    with pytest.raises(IdentifyError):
+        provider.identify(jpeg_image())
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(200, content=b"<html>nope</html>"),
+        httpx.Response(200, content=b""),
+        httpx.Response(200, json={"other": []}),
+        httpx.Response(200, json=[]),
+        httpx.Response(200, json={"results": "none"}),
+        httpx.Response(200, json={"results": None}),
+    ],
+)
+def test_plantnet_body_that_is_not_json_or_lacks_results_raises_identify_error(response):
+    with pytest.raises(IdentifyError):
+        plantnet(lambda request: response).identify(jpeg_image())
+
+
+def test_plantnet_webp_upload_raises_identify_error_without_calling_upstream():
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, json={"results": []})
+    image = ValidatedImage(data=b"RIFF\x00\x00\x00\x00WEBPVP8 ", content_type="image/webp", filename="a.webp")
+
+    with pytest.raises(IdentifyError):
+        plantnet(handler).identify(image)
+
+    assert calls == []
+
+
+def test_plantnet_failure_is_502_through_the_route(client, use_provider):
+    use_provider(plantnet(respond({}, status=500)))
+
+    response = post_photo(client)
+
+    assert response.status_code == 502
+    assert response.json() == {"message": "We couldn't identify that photo — try again"}
+
+
+# --- Pl@ntNet: the key never leaks ----------------------------------------------
+
+
+def test_plantnet_failing_upstream_never_leaks_the_key_to_the_response_or_logs(client, use_provider, caplog):
+    caplog.set_level(logging.DEBUG)
+
+    def handler(request):
+        raise httpx.ConnectError(f"cannot reach {request.url}", request=request)
+    use_provider(plantnet(handler))
+
+    response = post_photo(client)
+
+    assert response.status_code == 502
+    assert API_KEY not in response.text
+    assert API_KEY not in str(dict(response.headers))
+    assert API_KEY not in caplog.text
+
+
+def test_plantnet_identify_error_has_no_key_in_message_or_cause():
+    def handler(request):
+        raise httpx.ConnectError(f"cannot reach {request.url}", request=request)
+
+    with pytest.raises(IdentifyError) as excinfo:
+        plantnet(handler).identify(jpeg_image())
+
+    assert API_KEY not in str(excinfo.value)
+    assert excinfo.value.__cause__ is None
+    assert excinfo.value.__suppress_context__ is True
+
+
+def test_plantnet_httpx_request_log_line_has_the_key_redacted(caplog):
+    caplog.set_level(logging.DEBUG)
+    provider = plantnet(respond({"results": []}))
+
+    provider.identify(jpeg_image())
+
+    assert API_KEY not in caplog.text
+
+
+# --- Provider selection from env -----------------------------------------------
+
+
+def select(monkeypatch, provider=None, key=None):
+    for name, value in (("FERNSLOP_IDENTIFY_PROVIDER", provider), ("FERNSLOP_IDENTIFY_API_KEY", key)):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+    return get_identify_provider(store)
+
+
+def test_env_plantnet_with_a_key_selects_the_plantnet_provider(monkeypatch):
+    assert isinstance(select(monkeypatch, "plantnet", "abc"), PlantNetIdentifyProvider)
+
+
+@pytest.mark.parametrize(
+    ("provider", "key"),
+    [
+        (None, None),
+        (None, "abc"),
+        ("stub", "abc"),
+        ("openai", "abc"),
+        ("plantnet", None),
+        ("plantnet", ""),
+        ("plantnet", "   "),
+    ],
+)
+def test_env_any_other_combination_selects_the_stub(monkeypatch, provider, key):
+    assert isinstance(select(monkeypatch, provider, key), StubIdentifyProvider)
