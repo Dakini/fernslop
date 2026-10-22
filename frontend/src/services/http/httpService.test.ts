@@ -18,12 +18,13 @@ afterEach(() => {
 });
 
 describe("http GardenService", () => {
-  it("uses the mock by default and the HTTP service when VITE_USE_MOCK=false", async () => {
+  it("uses the HTTP service by default and the mock when VITE_USE_MOCK=true", async () => {
+    vi.stubEnv("VITE_USE_MOCK", "true");
     await getServices().listPlants();
     expect(fetchMock).not.toHaveBeenCalled();
 
     setServices(null);
-    vi.stubEnv("VITE_USE_MOCK", "false");
+    vi.stubEnv("VITE_USE_MOCK", "");
     vi.stubEnv("VITE_API_BASE_URL", "http://api.test/api/");
     fetchMock.mockResolvedValue(reply(200, []));
     await getServices().listPlants();

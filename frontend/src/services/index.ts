@@ -1,6 +1,6 @@
 // The ONLY entry point the UI uses for backend calls.
-// The mock is the default; `VITE_USE_MOCK=false` selects the HTTP service
-// (base URL from `VITE_API_BASE_URL`, default `/api`).
+// The HTTP service is the default (base URL from `VITE_API_BASE_URL`, default
+// `/api`); `VITE_USE_MOCK=true` selects the in-browser mock.
 import { createHttpService } from "./http/httpService";
 import {
   createMockService,
@@ -13,7 +13,7 @@ let instance: GardenService | null = null;
 
 export function getServices(): GardenService {
   if (!instance) {
-    if (import.meta.env.VITE_USE_MOCK === "false") {
+    if (import.meta.env.VITE_USE_MOCK !== "true") {
       instance = createHttpService({
         baseUrl: import.meta.env.VITE_API_BASE_URL,
       });

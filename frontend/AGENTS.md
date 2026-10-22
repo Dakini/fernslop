@@ -11,6 +11,6 @@
 
 ## Architecture
 - All backend calls go through `getServices()` in `src/services/index.ts`, typed by the `GardenService` interface; UI never talks to storage directly — so a real backend can replace the mock by swapping one implementation.
-- `src/services/mock/` is a full in-browser mock (localStorage + cross-tab sync) used until a real backend exists; keep it in step with the interface and its tests.
+- `src/services/mock/` is a full in-browser mock (localStorage + cross-tab sync) used when `VITE_USE_MOCK=true` (the HTTP service is the default); keep it in step with the interface and its tests.
 - Care-ring maths lives in `src/services/care.ts` as pure functions; intervals come only from plant data.
 - Data routes use `ssr: false` because the mock reads browser storage.

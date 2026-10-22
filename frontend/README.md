@@ -31,10 +31,11 @@ npm run dev
 
 ## Backend selection
 
-The app runs against an in-browser mock by default. To use the real backend
-(`backend/`, served on :8000), set these in `.env.local` (or the environment):
+The app talks to the real backend (`backend/`, run it with `make backend` from the
+repo root, port 8091) by default. To run against the in-browser mock instead, set
+these in `.env.local` (or the environment):
 
 | Variable            | Default | Meaning                                                              |
 | ------------------- | ------- | -------------------------------------------------------------------- |
-| `VITE_USE_MOCK`     | unset   | Anything but `false` uses the mock; `false` uses the HTTP service.   |
-| `VITE_API_BASE_URL` | `/api`  | API base URL (trailing slash tolerated). `vite dev` proxies `/api` to `http://localhost:8000`. |
+| `VITE_USE_MOCK`     | unset   | `true` uses the in-browser mock; anything else uses the HTTP service. |
+| `VITE_API_BASE_URL` | `/api`  | API base URL (trailing slash tolerated). `vite dev` proxies `/api` to `http://localhost:8091`. |
