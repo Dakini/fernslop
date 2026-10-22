@@ -64,3 +64,18 @@ Tests:
 - Playwright (Chromium 375/1280) against the real backend (`uv run uvicorn app.main:app` on 8091, temp SQLite in scratchpad) and `vite dev` with the HTTP service (default, no `VITE_USE_MOCK`; `/api` proxied to 8091): the checks above. Servers stopped afterwards.
 
 **PM (re-groom after QA fail):** Changed criterion 2 only: it now says Cancel and Esc close the dialog without deleting, and clicking the overlay neither closes it nor deletes. Why: the criterion was wrong, the code is not. A hard delete cannot be undone and the confirm is the only guard (no accounts), so the standard alert-dialog behaviour of ignoring outside clicks is the safer choice, and nothing in `_docs/lovable-spec.md` or the existing dialogs in `frontend/src` requires overlay-dismiss. No code change is needed; QA only re-verifies criterion 2 (Cancel and Esc close it with no DELETE, an overlay click leaves it open with no DELETE). The other six criteria passed and are unchanged.
+
+**QA:**
+
+## QA: PASS
+
+Re-check of criterion 2 against its amended wording. `git log` shows only `backlog/` files changed since 8ebb2e9, so no app code changed.
+
+- [x] Criterion 2: dialog names the garden and says it is permanent; Cancel focused first; terracotta confirm; stacked buttons at 375; Cancel and Esc close it without deleting; clicking the overlay does not close it and does not delete - PASS
+      Real backend (temp SQLite in the scratchpad) and `vite dev`, Chromium at 1280 and 375. Text: "Delete "QA Plot A"? ... Its plants, activity, photos and follower emails will be gone for good. This cannot be undone." `document.activeElement` on open is Cancel. Confirm background is `oklch(0.63 0.12 45)` (= `--terracotta`). At 375 the dialog is 343px wide with no sideways scroll (scrollWidth 375) and two 293px-wide, 44px-high buttons stacked (Delete garden above Cancel). Cancel closed it; Esc closed it. With the dialog open, `elementFromPoint(5,5)` was the `bg-black/80` overlay; clicking there (and again near the opposite corner) left the dialog open. No DELETE request was sent in any of these steps (request listener empty) and GET /api/rooms/{id} was still 200. Same results at both widths.
+
+Criteria 1 and 3-7 carry over unchanged from the earlier QA run (all PASS; no app code changed since).
+
+Tests:
+- `cd frontend && npm test` - 39 passed, 0 failed (8 files)
+- Playwright (Chromium 1280/375) against the real backend and `vite dev`; servers stopped afterwards.
