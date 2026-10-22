@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 import pytest
 
 from app.models import DeletePlantPayload, RestoreAreaPayload, RestorePlantPayload
-from app.seed import SeedData, build_seed, plant_id
+from app.seed import SeedData, build_seed
 
 NOW = datetime(2026, 10, 22, 12, 0, 0, tzinfo=UTC)
 
