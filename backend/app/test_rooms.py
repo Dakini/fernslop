@@ -127,3 +127,24 @@ def test_create_room_with_a_body_over_the_size_cap_gives_413_and_creates_nothing
 
     assert response.status_code == 413
     assert store.list_rooms() == rooms_before
+
+
+def test_create_room_with_a_chunked_body_over_the_size_cap_gives_413_and_creates_nothing(rooms_client, store):
+    # A generator body is sent chunked with no Content-Length, so only the streaming check can catch it.
+    rooms_before = store.list_rooms()
+    chunks = (b"x" * 1024 for _ in range(MAX_JSON_BODY_BYTES // 1024 + 1))
+
+    response = rooms_client.post("/api/rooms", content=chunks, headers={"Content-Type": "application/json"})
+
+    assert response.status_code == 413
+    assert response.json() == {"message": "Request body is too large"}
+    assert store.list_rooms() == rooms_before
+
+
+def test_create_room_sent_as_json_with_a_charset_gives_201(rooms_client):
+    response = rooms_client.post(
+        "/api/rooms", content=b'{"name": "Charset"}', headers={"Content-Type": "application/json; charset=utf-8"}
+    )
+
+    assert response.status_code == 201
+    assert response.json()["name"] == "Charset"
