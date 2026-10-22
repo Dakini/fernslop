@@ -6,8 +6,14 @@
 // You can pass additional config via defineConfig({ vite: { ... }, etc... }) if needed.
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 
+// FERNSLOP_STATIC=1 builds a client-only SPA (dist/client, with a shell page) for the backend to
+// serve; without it the build keeps the default SSR/Nitro target.
+const staticBuild = process.env.FERNSLOP_STATIC === "1";
+
 export default defineConfig({
+  ...(staticBuild && { nitro: false as const }),
   tanstackStart: {
+    ...(staticBuild && { spa: { enabled: true } }),
     // Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).
     // nitro/vite builds from this
     server: { entry: "server" },

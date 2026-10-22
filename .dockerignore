@@ -1,0 +1,14 @@
+.git
+.claude
+.serena
+tmp
+backlog
+_docs
+**/node_modules
+**/__pycache__
+**/.venv
+**/.pytest_cache
+frontend/dist
+frontend/.output
+backend/*.db
+backend/*.db-*
