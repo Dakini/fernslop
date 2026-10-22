@@ -21,3 +21,27 @@
 
 **Engineer:** Added `psycopg[binary]` (v3) via `uv add` (in `pyproject.toml` and `uv.lock`; Dockerfile only got a comment). In `sql_store.py`, `_make_engine` now routes `postgresql` URLs to `_make_postgres_engine`: `pool_pre_ping=True` plus a `begin` listener that takes `pg_advisory_xact_lock(<fixed key>)`, so every transaction (including the create-tables-and-seed one at start-up) is exclusive across stores and processes and the lock is released by the database at commit or rollback. The SQLite branch is untouched (pragmas, `BEGIN IMMEDIATE`, `StaticPool`), and other backends still get a plain engine. Updated the docstrings in `sql_store.py` and `store.py`. `conftest.py`: with `FERNSLOP_TEST_DATABASE_URL` set, the database is emptied before each test (`DROP SCHEMA public CASCADE`) and both `FERNSLOP_DATABASE_URL` and every `SqlStore("sqlite://")` built by a test use it (engines disposed afterwards); a `requires_postgres` skip marker is exported. The run-on-Postgres command is in `_docs/testing-guidelines.md`. Tests added (2, both `requires_postgres`, in `test_sql_store.py`): two stores starting at the same moment seed once with no error and a restart does not re-seed; two stores with 10 threads each doing read-count-save end with exactly 20 records. Both fail if the advisory lock is removed. The existing shared tests (ordering by `seq`, case-insensitive follow email, photo bytes, rollback and nesting) cover those criteria on Postgres. Results: SQLite `uv run pytest` 122 passed, 2 skipped; Postgres 17 (`FERNSLOP_TEST_DATABASE_URL`) 124 passed. Docker: `docker build -t fernslop .` then run with `FERNSLOP_DATABASE_URL=postgresql+psycopg://...@host.docker.internal:55432/fernslop` against a throwaway postgres: `/api/health` returned `{"status":"ok"}` and `/api/rooms` returned the 3 seeded rooms; after a container restart there were still 3 rooms in the database (not re-seeded). Throwaway containers removed. Note: tests that use a `tmp_path` SQLite file URL (restart, threads, photo cleanup) still run on SQLite even in the Postgres run.
 
+**QA:**
+
+## QA: PASS
+
+- [x] `psycopg[binary]` v3 in `pyproject.toml` and `uv.lock`; `uv sync --frozen --no-dev` installs it; Dockerfile needs no functional change - PASS
+      Synced into a throwaway env: `import psycopg` gave 3.3.6 with the `binary` implementation.
+- [x] Empty Postgres: tables created and seeded once; concurrent start seeds once; restart does not re-seed - PASS
+      The two-stores-at-once and restart tests pass on Postgres. Also restarted the Docker app against the same database: still 3 rooms in `rooms`.
+- [x] Same behaviour as SQLite (seq ordering, case-insensitive follow email, photo bytes, JSON round trip) - PASS
+      The shared suite passes unchanged on Postgres 17.
+- [x] `transaction()` exclusive across stores; rollback and nesting work - PASS
+      The two-stores, 10-threads-each test ends with 20 records and no error. Code takes `pg_advisory_xact_lock` in the `begin` listener.
+- [x] SQLite unchanged and gated - PASS
+      In `_make_engine`, pragmas, `BEGIN IMMEDIATE` and `StaticPool` are only on the sqlite path. `pool_pre_ping` and the advisory lock are only in `_make_postgres_engine`, reached only for `postgresql`.
+- [x] `uv run pytest` passes on SQLite with no setup; `FERNSLOP_TEST_DATABASE_URL` runs the same suite on Postgres; Postgres-only tests skip when unset; command in `_docs/testing-guidelines.md` - PASS
+- [x] Docker image against a throwaway postgres serves `/api/health` and seeded `/api/rooms` - PASS
+      `docker build .`, then run with `FERNSLOP_DATABASE_URL=postgresql+psycopg://postgres:pw@host.docker.internal:55433/fernslop`: `/api/health` returned `{"status":"ok"}` and `/api/rooms` returned 3 rooms.
+
+Tests:
+- `cd backend && uv run pytest` (SQLite): 122 passed, 2 skipped, 0 failed
+- `cd backend && FERNSLOP_TEST_DATABASE_URL=postgresql+psycopg://postgres:pw@localhost:55433/fernslop uv run pytest` (postgres:17-alpine): 124 passed, 0 failed
+- `cd backend && UV_PROJECT_ENVIRONMENT=<tmp> uv sync --frozen --no-dev`, then `import psycopg`: OK
+
+Throwaway containers and the QA image were removed. No code changed.
