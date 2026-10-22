@@ -30,3 +30,21 @@ A command a scheduler can run weekly (`uv run python -m app.digest`) emails each
 ## Comments
 
 Software Engineer: Implemented in `backend/app/digest.py` (`build_digests`, `EmailSender`, `ConsoleSender`, `InMemorySender`, `send_digests`/`run`, `main`) with 22 tests in `backend/app/test_digest.py`; full suite passes. Notes: the 7-day window is `now-7d <= created_at <= now` (future events excluded). Failed sends are logged at ERROR with the recipient and exception type only (no message/body, so no token) and counted; `main` prints `Digests sent: N, failed: M` and exits 1 if any failed. `uv run python -m app.digest` uses the in-memory seeded store, so it currently sends nothing until follows exist (persistence is #015).
+
+## QA: PASS
+
+- [x] `build_digests(store, now)` is pure, one digest per follow (recipient, subject, plain-text body, one room); room with no follows gives none - PASS
+      Scratch script: store unchanged after call, `timestamps.now` patched to raise was never hit, 2 followers gave 2 digests, no-follow room gave none
+- [x] 7-day window; inactive rooms give no digest whatever `last_activity_at` - PASS
+      6-day event counts; 8-day and 7d+1s events excluded; room with fresh `last_activity_at` but only 8-day event gave none (exactly 7d is included, future events excluded)
+- [x] Body names room, lists `FeedEvent.text` newest first; undone events never appear; only-undone room gets no digest - PASS
+- [x] Body ends with `<base>/unsubscribe?token=<token>`, `FERNSLOP_PUBLIC_URL` with default and trailing `/` stripped; distinct links per follower - PASS
+      Checked default, `https://x.org/`, `https://x.org///`, and empty env
+- [x] `EmailSender` / `ConsoleSender` / `InMemorySender`; `python -m app.digest` uses `ConsoleSender` and `timestamps.now()` - PASS
+      `uv run python -m app.digest` ran, printed `Digests sent: 0, failed: 0`, exit 0 (seeded store has no follows)
+- [x] One failing send does not stop the others; counts reported; failure not silent - PASS
+      Failing recipient raising with the body in its message: other 3 sent, report sent=3 failed=1, ERROR log has recipient + exception type only; `main()` printed `Digests sent: 3, failed: 1` and exited 1 (0 when none failed)
+- [x] Tests per criterion; token not in logs/console beyond the link - PASS
+      Token appears once in console output (the link) and never in log output
+
+Tests: `uv run pytest`, 705 passed, 0 failed (`app/test_digest.py`: 22 passed). Also ran my own script exercising the cases above.
