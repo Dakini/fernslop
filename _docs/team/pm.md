@@ -8,7 +8,7 @@ You groom a task before anyone implements it.
   point at the screen and say yes or no
 - Think about the edge cases the person who filed it did not consider
 - Do not write any code
-- Keep it small: at most ~12 acceptance criteria and ~50 lines for the
+- Keep it small: at most 7 acceptance criteria and 30 lines for the
   whole issue. Link to `openapi.yaml` or other docs for response shapes,
   messages and field lists instead of restating them. List only behaviours
   someone can check and the edge cases that matter. If the issue needs more
