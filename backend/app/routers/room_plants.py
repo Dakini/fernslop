@@ -23,6 +23,7 @@ from app.models import (
     RoomPlant,
     UndoPayload,
 )
+from app.rate_limit import WRITE, rate_limited
 from app.store import StoreProtocol, get_store
 
 router = APIRouter(tags=["Room plants"])
@@ -99,7 +100,7 @@ def _record(
     store.save_room(room)
 
 
-@router.post("/rooms/{room_id}/plants", operation_id="addPlant", status_code=201)
+@router.post("/rooms/{room_id}/plants", operation_id="addPlant", status_code=201, dependencies=[rate_limited(WRITE)])
 def add_plant(
     room_id: str,
     raw: JsonBody,
@@ -149,7 +150,7 @@ def add_plant(
     return room_plant
 
 
-@router.patch("/room-plants/{room_plant_id}", operation_id="movePlant")
+@router.patch("/room-plants/{room_plant_id}", operation_id="movePlant", dependencies=[rate_limited(WRITE)])
 def move_plant(
     room_plant_id: str,
     raw: JsonBody,
@@ -177,7 +178,7 @@ def move_plant(
     return moved
 
 
-@router.delete("/room-plants/{room_plant_id}", operation_id="removePlant", status_code=204)
+@router.delete("/room-plants/{room_plant_id}", operation_id="removePlant", status_code=204, dependencies=[rate_limited(WRITE)])
 def remove_plant(
     room_plant_id: str,
     store: Annotated[StoreProtocol, Depends(get_store)],
@@ -200,7 +201,7 @@ def remove_plant(
     return Response(status_code=204)
 
 
-@router.post("/room-plants/{room_plant_id}/care", operation_id="markCare")
+@router.post("/room-plants/{room_plant_id}/care", operation_id="markCare", dependencies=[rate_limited(WRITE)])
 def mark_care(
     room_plant_id: str,
     raw: JsonBody,

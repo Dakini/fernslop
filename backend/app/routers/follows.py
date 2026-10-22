@@ -15,6 +15,7 @@ from app import timestamps
 from app.body import JsonBody
 from app.errors import ApiError
 from app.models import RoomFollow, StoredFollow
+from app.rate_limit import FOLLOW, WRITE, rate_limited
 from app.store import StoreProtocol, get_store
 
 router = APIRouter(tags=["Follows"])
@@ -37,7 +38,7 @@ def _clean_email(value: object) -> str:
     return email
 
 
-@router.post("/rooms/{room_id}/follows", operation_id="followRoom", status_code=201)
+@router.post("/rooms/{room_id}/follows", operation_id="followRoom", status_code=201, dependencies=[rate_limited(FOLLOW)])
 def follow_room(
     room_id: str,
     raw: JsonBody,
@@ -68,7 +69,7 @@ def follow_room(
     return follow.to_public()
 
 
-@router.post("/follows/unsubscribe", operation_id="unfollow")
+@router.post("/follows/unsubscribe", operation_id="unfollow", dependencies=[rate_limited(WRITE)])
 def unfollow(raw: JsonBody, store: Annotated[StoreProtocol, Depends(get_store)]) -> dict[str, bool]:
     body = raw.object()
     token = body.get("token")

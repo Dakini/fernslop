@@ -4,7 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 
-from app import sql_store
+from app import rate_limit, sql_store
 from app.main import app
 from app.store import DATABASE_URL_ENV, close_stores
 
@@ -53,6 +53,15 @@ def reset_store(monkeypatch):
     close_stores()
     for engine in engines:  # stores a test built itself; free their connections
         engine.dispose()
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limit(monkeypatch):
+    """Every test starts with empty rate-limit counts and the default limits."""
+    monkeypatch.delenv(rate_limit.DISABLE_ENV, raising=False)
+    rate_limit.reset()
+    yield
+    rate_limit.reset()
 
 
 @pytest.fixture

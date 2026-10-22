@@ -22,6 +22,7 @@ from app.models import (
     RestoreAreaPayload,
     RestorePlantPayload,
 )
+from app.rate_limit import WRITE, rate_limited
 from app.routers.areas import MAX_LIVE_AREAS, TOO_MANY_AREAS_MESSAGE
 from app.routers.room_plants import GARDEN_FULL_MESSAGE, MAX_LIVE_PLANTS
 from app.store import StoreProtocol, get_store
@@ -98,7 +99,7 @@ def _apply(store: StoreProtocol, event: FeedEvent, now) -> None:
                 store.save_area(area.model_copy(update={"deleted_at": now}))
 
 
-@router.post("/feed-events/{event_id}/undo", operation_id="undoEvent", status_code=204)
+@router.post("/feed-events/{event_id}/undo", operation_id="undoEvent", status_code=204, dependencies=[rate_limited(WRITE)])
 def undo_event(
     event_id: str,
     store: Annotated[StoreProtocol, Depends(get_store)],
