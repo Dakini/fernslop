@@ -26,3 +26,15 @@
 ## Comments
 
 - Engineer: implemented `live.py` (per-stream subscriber with an `asyncio.Queue(maxsize=1)` and its loop under a `threading.Lock`; `notify` only calls `call_soon_threadsafe`; `subscriber_count`; `event_stream` async generator with `FERNSLOP_SSE_PING_SECONDS` pings) and `routers/live.py` (`subscribe`, 404 via `ApiError` before streaming, registered in `routers/__init__.py`). 5 tests in `backend/app/test_live.py`, all passing; the full suite passes except `test_store.py::test_transaction_does_not_roll_back_when_the_block_raises`, which comes from the in-progress SQLite store work (issue 015), not this change. No acceptance criteria changed.
+
+## QA: PASS
+
+- [x] Seeded room gives 200 `text/event-stream`, `Cache-Control: no-cache`, no actor headers, opens with `: ping`; unknown and non-UUID ids give JSON 404 `Room not found` - PASS (real uvicorn + httpx)
+- [x] `notify` sends exactly `event: change\ndata: <roomId>\n\n` to the room's streams and none to another room's - PASS (real add-plant gave one change on its room, nothing on the other room)
+- [x] `notify` is sync, uses `call_soon_threadsafe`, tolerates no subscribers / closed loop; message arrived from a route-handler thread - PASS
+- [x] `: ping` every `FERNSLOP_SSE_PING_SECONDS`, never a `change` - PASS (set to 1: pings at ~1 s; default/invalid handling read in `ping_seconds`)
+- [x] Subscriber removed when a stream ends; `subscriber_count` is 0 after connect/disconnect/cancel cycles - PASS (covered by `test_live.py`)
+- [x] One `change` per successful add/move/remove/care, area add/update/delete, undo, post; none for room create, follow, unsubscribe, photo, reads, 4xx - PASS (covered by `test_live.py`; add spot-checked live)
+- [x] Tests per criterion, no endless `TestClient` stream - PASS
+
+Tests: `uv run pytest app/test_live.py`, 5 passed, 0 failed; `uv run pytest`, 801 passed, 0 failed
