@@ -28,3 +28,13 @@
 **Edge cases:** New plant at 50/50. A 51st live plant gives 409 `This garden is full (50 plants max)`; soft-deleted don't count. Unknown `plant_id` 404. Move clamps to 0-100. Soft-deleted or unknown room plant 404 `Plant is no longer in this garden`. Care 422 `No <care> data for this plant` when the interval is null or 0. `restore_plant` is a snapshot from before the change. Every mutation bumps `last_activity_at`. Feed `text` is a fragment such as `added a Tomato`.
 
 ## Comments
+
+### Engineer: implementation notes
+
+Implemented all four endpoints in `backend/app/routers/room_plants.py` (registered in `routers/__init__.py`), the no-op `backend/app/live.py` (`notify(room_id)`, called as `live.notify(...)` after the transaction ends), and `backend/app/test_room_plants.py` (126 tests, one or more per criterion, on a fresh `Store` via `app.dependency_overrides[get_store]`). `uv run pytest` from `backend/`: 443 passed. No new dependencies, `models.py` unchanged, no criteria changed.
+
+Decisions where the criteria were silent:
+- Request bodies are parsed by hand, so every bad body (invalid JSON, non-object, wrong types) is 400, never 422. `NaN`/`Infinity`/overflowing floats for a coordinate are 400; integers too large for a float are clamped.
+- Check order: actor headers (400), then body (400), then room/plant lookups (404), then 409 (add) or 422 (care). A bad body on a removed plant therefore gives 400, not 404.
+- The feed `text` name is the nickname if set, else `common_name` (`added a` always uses `common_name`, since a new plant has no nickname).
+- The care timestamp, the event `created_at` and the room's `last_activity_at` all come from one `timestamps.now()` per request.
