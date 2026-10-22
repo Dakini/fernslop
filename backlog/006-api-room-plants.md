@@ -38,3 +38,17 @@ Decisions where the criteria were silent:
 - Check order: actor headers (400), then body (400), then room/plant lookups (404), then 409 (add) or 422 (care). A bad body on a removed plant therefore gives 400, not 404.
 - The feed `text` name is the nickname if set, else `common_name` (`added a` always uses `common_name`, since a new plant has no nickname).
 - The care timestamp, the event `created_at` and the room's `last_activity_at` all come from one `timestamps.now()` per request.
+
+### QA
+
+## QA: PASS
+
+- [x] Add returns 201 with a 50/50 `RoomPlant` (null nickname and `last_*_at`, `added_by_name` the actor, UUID4 id), shows in `GET /api/rooms/{id}`; unknown room 404 `Room not found`, unknown plant 404 `Plant not found`, missing/non-string/null/bool/list `plant_id`, non-object body, invalid JSON and empty body all 400 (never 422) - PASS
+- [x] 50 live plants gives 409 `This garden is full (50 plants max)`; 49 live plus 7 soft-deleted add succeeds; removing one from a full room lets add succeed again - PASS
+- [x] Move returns 200, clamps `-5` to 0 and `250` to 100, keeps floats (12.5, 33.25); missing x or y, string, boolean, null, list and empty body all 400 - PASS
+- [x] Remove returns 204 with an empty body, sets `deleted_at`, plant leaves the room state; repeat remove, unknown id, move and care on a removed plant all 404 `Plant is no longer in this garden` - PASS
+- [x] Care sets only the matching timestamp for all four care names and returns 200; null interval gives 422 `No <care> data for this plant` (all four names), interval 0 also 422; missing, unknown, wrong-case, non-string `care` 400 - PASS
+- [x] Each success writes exactly one feed event first in the room state (type, `room_plant_id`, actor name and device id, `undone_at` null); undo payload is `delete_plant` for add and `restore_plant` with the exact prior `RoomPlant` for move/remove/care; text is `added a`/`moved the`/`removed the`/`watered|fed|pruned|harvested the` plus nickname else `common_name`; `last_activity_at` equals the event `created_at` (and the care timestamp), with one `timestamps.now()` per request - PASS
+- [x] All four endpoints return 400 for missing, blank, over-length and control-character actor headers; every 4xx (headers, body, 404, 409, 422) left plants, feed and rooms byte-identical and did not call `live.notify`; every success called `live.notify(room_id)` exactly once, with no store transaction open at the time - PASS
+
+Tests: `uv run pytest`, 552 passed, 0 failed (full suite, including other engineers' in-progress work); `uv run pytest app/test_room_plants.py`, 105 passed, 0 failed. Also ran an independent script (scratchpad `qa006.py`, `qa006b.py`) with 630 checks against a fresh `Store` across every endpoint, error case and care type: 0 failures. No code was changed.
