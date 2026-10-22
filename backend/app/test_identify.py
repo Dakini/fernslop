@@ -7,7 +7,7 @@ import pytest
 from app.identify import PlantNetIdentifyProvider, get_identify_provider
 from app.main import app
 from app.models import IdentifyCandidate
-from app.store import store
+from app.store import get_store
 from app.uploads import ValidatedImage
 
 JPEG_HEAD = b"\xff\xd8\xff\xe0"
@@ -23,7 +23,7 @@ def post_photo(client, data=None, filename="tomato.jpg", content_type="image/jpe
 
 
 def candidate(plant_id, confidence):
-    plant = next(p for p in store.list_plants() if p.id == plant_id)
+    plant = next(p for p in get_store().list_plants() if p.id == plant_id)
     return IdentifyCandidate(plant=plant, confidence=confidence)
 
 
@@ -97,7 +97,7 @@ API_KEY = "sekrit-key-123"
 
 def plantnet(handler, key=API_KEY):
     client = httpx.Client(transport=httpx.MockTransport(handler))
-    return PlantNetIdentifyProvider(store.list_plants(), key, client=client)
+    return PlantNetIdentifyProvider(get_store().list_plants(), key, client=client)
 
 
 def respond(body, status=200):

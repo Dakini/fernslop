@@ -242,3 +242,9 @@ __marimo__/
 # Logs / scratch
 *.log
 tmp/
+
+# Local SQLite database (default FERNSLOP_DATABASE_URL) and its sidecar files
+fernslop.db
+fernslop.db-wal
+fernslop.db-shm
+fernslop.db-journal

@@ -6,7 +6,8 @@ import pytest
 from app import digest
 from app.digest import build_digests, run
 from app.models import FeedEvent, Room, StoredFollow
-from app.store import Store, get_store
+from app.sql_store import SqlStore
+from app.store import get_store
 
 NOW = datetime(2026, 10, 22, 12, 0, 0, tzinfo=UTC)
 
@@ -18,7 +19,7 @@ def public_url_env(monkeypatch):
 
 @pytest.fixture
 def store():
-    return Store(seed=False)
+    return SqlStore("sqlite://", seed=False)
 
 
 def make_room(store, room_id="room-1", name="Elm Street"):
@@ -124,7 +125,7 @@ def test_one_failing_send_does_not_stop_the_others_and_the_token_never_reaches_t
     assert "secret-tok" not in caplog.text
 
 
-# --- main (runs against get_store(), in-memory or SQLite) ---------------------
+# --- main (runs against get_store()) ---------------------
 
 
 def test_main_sends_the_digests_of_the_configured_store_and_exits_zero(monkeypatch, capsys):

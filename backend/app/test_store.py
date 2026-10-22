@@ -1,12 +1,9 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from fastapi.testclient import TestClient
 
-from app.main import app
 from app.models import FeedEvent, Room, RoomPlant, StoredFollow, StoredPhoto
-from app.sqlite_store import SqliteStore
-from app.store import Store, get_store
+from app.sql_store import SqlStore
 
 T0 = datetime(2026, 10, 22, 9, 30, 0, tzinfo=UTC)
 
@@ -65,13 +62,10 @@ def make_photo(id="photo-1", **overrides) -> StoredPhoto:
     return StoredPhoto(**{**fields, **overrides})
 
 
-# Every behaviour test below runs against both stores through this one fixture.
-@pytest.fixture(params=["memory", "sqlite"])
-def new_store(request, tmp_path):
-    """A factory: ``new_store()`` is seeded, ``new_store(seed=False)`` is empty."""
-    if request.param == "memory":
-        return lambda seed=True: Store(seed=seed)
-    return lambda seed=True: SqliteStore(tmp_path / "test.db", seed=seed)
+@pytest.fixture
+def new_store():
+    """A factory: ``new_store()`` is a seeded in-memory store, ``new_store(seed=False)`` an empty one."""
+    return lambda seed=True: SqlStore("sqlite://", seed=seed)
 
 
 # --- Protocol and construction -----------------------------------------------
@@ -148,36 +142,3 @@ def test_transaction_rolls_back_every_save_and_delete_when_the_block_raises(new_
 
 
 # --- Encapsulation -----------------------------------------------------------
-
-
-# --- SQLite persistence ------------------------------------------------------
-
-
-def test_sqlite_store_keeps_data_across_a_restart_and_never_reseeds(tmp_path, monkeypatch):
-    path = tmp_path / "fern.db"
-    monkeypatch.setenv("FERNSLOP_DB_PATH", str(path))
-    first = get_store()
-    assert isinstance(first, SqliteStore) and path.exists()
-    seeded_room = first.list_rooms()[0]
-    first.save_room(seeded_room.model_copy(update={"name": "Edited"}))
-    first.save_room(make_room("mine"))
-    first.save_room_plant(make_room_plant(room_id="mine"))
-    first.save_follow(make_follow(room_id="mine"))
-    undo = {"kind": "delete_plant", "room_plant_id": "rp-1"}
-    first.save_feed_event(make_event(room_id="mine", undo_payload=undo))
-    first.save_photo(make_photo("5f0f2f6e-0000-4000-8000-000000000001", data=bytes(range(256))))
-    first.delete_follow("f-1")
-    first.save_follow(make_follow("f-2", room_id="mine", unsubscribe_token="tok-2"))
-
-    reopened = SqliteStore(path)
-
-    assert reopened.get_room(seeded_room.id).name == "Edited"
-    assert len(reopened.list_rooms()) == 4
-    assert reopened.get_room_plant("rp-1") == make_room_plant(room_id="mine")
-    assert reopened.get_feed_event("ev-1").undo_payload.room_plant_id == "rp-1"
-    assert [f.id for f in reopened.list_follows("mine")] == ["f-2"]
-    client = TestClient(app)
-    response = client.get("/api/photos/5f0f2f6e-0000-4000-8000-000000000001")
-    assert response.content == bytes(range(256))
-    reopened.reset()
-    assert reopened.get_room(seeded_room.id).name == seeded_room.name

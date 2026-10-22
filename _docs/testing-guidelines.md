@@ -157,10 +157,16 @@ The sections above describe the Django setup. The FastAPI backend in
 - Use a `client` fixture built on `fastapi.testclient.TestClient` (needs
   `httpx`). Do not call route functions directly. There is no `reverse()`, so
   assert literal paths including the `/api` prefix.
-- The in-memory store is a module-level singleton. `backend/conftest.py`
-  defines an autouse, function-scoped `reset_store` fixture that resets the
-  store before and after every test, plus the `client` fixture. This is the one
-  shared `conftest.py`; test-data factories still live in each test module.
+- The store is a SQLAlchemy database chosen by `FERNSLOP_DATABASE_URL`.
+  `backend/conftest.py` defines an autouse, function-scoped `reset_store`
+  fixture that points that variable at an in-memory SQLite database
+  (`sqlite://`) and drops the cached `get_store()` store before and after every
+  test, so each test gets a fresh seeded database and `./fernslop.db` is never
+  touched, plus the `client` fixture. This is the one shared `conftest.py`;
+  test-data factories still live in each test module. A test that needs its
+  own store builds `SqlStore("sqlite://")` (or a `tmp_path` file URL when it
+  needs a restart or threads) and injects it with
+  `app.dependency_overrides[get_store]`.
 - Errors are `{"message": ...}` bodies, not forms. Assert the status code and
   `response.json()["message"]` where the Django rules say to check
   `form.errors`. Validation failures are 400 (422 only for `markCare`).

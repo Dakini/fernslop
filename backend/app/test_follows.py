@@ -5,7 +5,8 @@ from fastapi.testclient import TestClient
 
 from app import timestamps
 from app.main import app
-from app.store import Store, get_store
+from app.sql_store import SqlStore
+from app.store import get_store
 
 PUBLIC_KEYS = {"id", "room_id", "email", "created_at"}
 BAD_EMAIL = "That email doesn't look right"
@@ -13,8 +14,8 @@ BAD_EMAIL = "That email doesn't look right"
 
 @pytest.fixture
 def store():
-    """A fresh seeded store, injected in place of the module-level singleton."""
-    fresh = Store()
+    """A fresh seeded store, injected in place of the configured store."""
+    fresh = SqlStore("sqlite://")
     app.dependency_overrides[get_store] = lambda: fresh
     yield fresh
     app.dependency_overrides.pop(get_store, None)

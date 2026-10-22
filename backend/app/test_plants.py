@@ -1,6 +1,6 @@
 import pytest
 
-from app.store import store
+from app.store import get_store
 
 
 def names(plants):
@@ -14,7 +14,7 @@ def test_list_plants_returns_all_51_reference_plants_in_seed_order(client):
     response = client.get("/api/plants")
 
     assert response.status_code == 200
-    assert [plant["id"] for plant in response.json()] == [plant.id for plant in store.list_plants()]
+    assert [plant["id"] for plant in response.json()] == [plant.id for plant in get_store().list_plants()]
     assert len(response.json()) == 51
     assert {"id", "common_name", "scientific_name", "category", "water_every_days", "image_url"} <= set(response.json()[0])
 
@@ -46,7 +46,7 @@ def test_search_treats_the_query_as_a_literal_string(client, q):
     )
     assert response.json() == [
         plant.model_dump(mode="json")
-        for plant in store.list_plants()
+        for plant in get_store().list_plants()
         if q.casefold() in plant.common_name.casefold() or q.casefold() in plant.scientific_name.casefold()
     ]
 
@@ -56,7 +56,7 @@ def test_search_with_missing_empty_or_blank_query_returns_first_12_plants(client
     response = client.get(path)
 
     assert response.status_code == 200
-    assert [plant["id"] for plant in response.json()] == [plant.id for plant in store.list_plants()[:12]]
+    assert [plant["id"] for plant in response.json()] == [plant.id for plant in get_store().list_plants()[:12]]
 
 
 # --- OpenAPI -----------------------------------------------------------------

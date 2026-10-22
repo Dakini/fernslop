@@ -5,7 +5,8 @@ PORT ?= 8091
 install:
 	cd backend && uv sync
 
-# Run the backend on $(PORT) (default 8091)
+# Run the backend on $(PORT) (default 8091). Data lives in the SQLAlchemy database at
+# FERNSLOP_DATABASE_URL (default sqlite:///fernslop.db in backend/, created on first use).
 backend:
 	cd backend && uv run uvicorn app.main:app --port $(PORT)
 
