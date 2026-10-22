@@ -1,0 +1,4 @@
+# [api] Undo feed events
+**What:** `POST /feed-events/{eventId}/undo` applies the event's `undo_payload` (`restore_plant`, `delete_plant` or `restore_area`) and sets `undone_at`. It writes no new feed event.
+**Why:** The feed's undo button depends on it. It relies on the payloads written in 006 and 007.
+**Edge cases:** An event with no payload (a post) returns 409 `This can't be undone`. Undoing twice returns 409 `Already undone`. Restoring a plant or area into a room that is at its limit returns 409 with the same messages as add. On any 409 nothing changes and `undone_at` stays null, so the operation must be atomic. An unknown event returns 404. Undoing an older event after newer edits writes the old snapshot back as-is, which is the spec's behaviour. Undo still requires the actor headers, and it bumps `last_activity_at` and the live stream.

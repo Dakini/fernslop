@@ -1,0 +1,4 @@
+# [api] Scaffold the FastAPI backend in `backend/`
+**What:** A uv project in `backend/` with a FastAPI app mounted at `/api` (per `openapi.yaml` `servers`), split into `routers/`, `models.py`, `store.py`, `auth.py`, plus pytest wired up so `uv run pytest` runs from `backend/`.
+**Why:** Every other `api` issue builds on this layout; the request asks for routers/models/store/auth modules and tests.
+**Edge cases:** FastAPI's default validation error is 422 `{detail}`. The spec wants 400 with an `Error` `{message}` body (422 is reserved for `markCare`), so add a global handler for that. Timestamps must be in the exact format `2026-10-22T09:30:00.000Z`, with milliseconds and a `Z`, because the frontend compares them as strings. Add CORS for the frontend dev server. `_docs/testing-guidelines.md` is written for Django, so the PM should adapt it.

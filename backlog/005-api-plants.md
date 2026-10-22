@@ -1,0 +1,4 @@
+# [api] Plants: list, search, identify (stubbed)
+**What:** `GET /plants`, `GET /plants/search` and `POST /plants/identify`. Identify returns up to 3 candidates from the reference table using a deterministic stub, like the mock's `identifyPlant`, instead of calling a real third-party API.
+**Why:** The add-plant flow needs these. The real provider is out of scope and moved to 012.
+**Edge cases:** Search is a case-insensitive substring match on common or scientific name. A missing, empty or whitespace-only `q` returns the first 12 plants. A file over 5 MiB (5 × 1024 × 1024) returns 413, and a type other than jpeg/png/webp returns 415, both with the exact messages from the spec. Decide whether the type check trusts the declared content type or sniffs the bytes. Candidates are sorted by confidence, highest first. The 502 path is unused until 012.

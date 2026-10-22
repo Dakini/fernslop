@@ -1,0 +1,4 @@
+# [api] Areas: add, update, delete
+**What:** `POST /rooms/{roomId}/areas`, `PATCH /areas/{id}` (partial) and `DELETE /areas/{id}` (soft delete). Each one writes an `area_changed` feed event with a `restore_area` undo payload, as defined in `openapi.yaml`.
+**Why:** These let people draw beds and ponds on the canvas.
+**Edge cases:** Adding an 11th live area returns 409 `This garden has the maximum 10 areas`. A PATCH with an empty body returns 400 (`minProperties: 1`). Unlike plant moves, area percents outside 0–100 should be rejected with 400; the PM should confirm this. An unknown `colour` returns 400, even though the frontend tolerates it. A soft-deleted or unknown area returns 404 `Area not found`. The undo payload for an add has `area: null`. Rename text looks like `renamed "Veg bed" to "Herbs"`, and the PM should define the text for move, resize and delete.

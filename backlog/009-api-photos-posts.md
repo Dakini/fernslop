@@ -1,0 +1,4 @@
+# [api] Photos and feed posts
+**What:** `POST /photos` stores the image bytes in memory and returns `{id, url: "/api/photos/{id}"}`. `GET /photos/{id}` serves the bytes. `POST /rooms/{roomId}/posts` creates a `post` event.
+**Why:** This lets people post updates and photos to a room's feed.
+**Edge cases:** Uploads have the same 413/415 rules as identify, so share that validation with 005. GET returns the original content type with long public cache headers, and 404 for an unknown photo. Post text is trimmed. If both text and photo are empty, return 400 `Write something or add a photo`. An unknown `photo_id` returns 400 `That photo didn't upload — try again`. The server copies `photo_url` from the stored photo and never takes it from the client. A post has `undo_payload: null`. Photos are not tied to a room. Cleaning up orphaned photos is out of scope and moved to 015.
