@@ -26,3 +26,19 @@ Verify commit `79c90d5` (made outside the process; `audit.md` 3 filtering part a
 ## Comments
 
 **Engineer:** Verified `79c90d5`; every criterion holds, so `text.py` is unchanged. A throwaway script (not committed) checked CRLF/NUL, U+202E, U+200B and U+2028 against `X-Actor-Name`, room name/description/region, area label (add and rename) and post text: each gives 400 with the field-named message and writes nothing. 👩‍🌾, 👍🏽, 🇬🇧, accented, Cyrillic, CJK and Arabic text are accepted. Post text keeps `\n`/`\t` and stores `\r\n` and lone `\r` as `\n`. A room and area saved with U+202E straight through the store still load via `GET /api/rooms` and `GET /api/rooms/{id}` (200), and moving that area without `label` works. `openapi.yaml`: added a threat-model paragraph to Authentication. Listed the invalid-character 400 messages on `createRoom`, on `addArea`/`updateArea` (new shared `BadAreaRequest` response), on `postUpdate` and on the `X-Actor-Name` parameter. Two new tests: `test_post_accepts_emoji_and_non_latin_letters_in_name_and_text` (test_posts.py, parametrised) and `test_rename_area_to_a_label_with_a_right_to_left_override_returns_400_and_writes_nothing` (test_areas.py). `uv run pytest`: 140 passed, 2 skipped. `uvx ruff check .`: clean.
+
+## QA: PASS
+
+- [x] Cc/Cf/Zl/Zp gives 400 with a field-named message and writes nothing - PASS
+      TestClient: CRLF, NUL, U+202E, U+200B, U+2028 in room name/description/region, area label (add and PATCH rename), post text and `X-Actor-Name` each gave 400 (`Name ...`, `Description ...`, `Region ...`, `An area label ...`, `Text ...`, `X-Actor-Name contains invalid characters.`). Rooms, areas and feed events were unchanged. The one exception is CRLF in post text, which is accepted and stored as `\n` as the next criterion requires.
+- [x] 👩‍🌾, 👍🏽, 🇬🇧, accented and non-Latin letters accepted; `\n`/`\t` kept; `\r\n` and lone `\r` stored as `\n` - PASS
+      Each was accepted round-trip in room fields, area label add/rename, post text and actor name. `"a\tb\nc"` was kept, and `"x\r\ny"` and `"x\ry"` were stored as `"x\ny"`.
+- [x] Pre-filter rows with U+202E still load and move - PASS
+      Saved a room name and an area label with U+202E through the store. `GET /api/rooms` gave 200, `GET /api/rooms/{id}` gave 200, and `PATCH /api/areas/{id}` with only `x_pct` gave 200.
+- [x] `openapi.yaml` lists the 400 message on createRoom, addArea, updateArea, postUpdate and actor headers - PASS
+- [x] Authentication section states the threat model in 2–4 sentences - PASS
+      It has 3 sentences covering self-asserted names, posting as "Ada", Cyrillic "А" not being filtered and only control/format characters being rejected.
+- [x] New tests: emoji accepted; area label with U+202E rejected - PASS
+      `test_post_accepts_emoji_and_non_latin_letters_in_name_and_text` and `test_rename_area_to_a_label_with_a_right_to_left_override_returns_400_and_writes_nothing`. There are 2 new tests, within the limit.
+
+Tests: `cd backend && uv run pytest`, 140 passed, 2 skipped, 0 failed
