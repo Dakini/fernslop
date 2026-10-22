@@ -375,7 +375,7 @@ function FollowButton({ roomId }: { roomId: string }) {
     <Popover>
       <PopoverTrigger asChild><Button variant="soft"><Bell /> Follow</Button></PopoverTrigger>
       <PopoverContent className="rounded-2xl bg-cream">
-        {done ? <p className="text-sm">You'll get a weekly digest when this garden is busy. 🌱</p> : (
+        {done ? <p role="status" className="text-sm">Check your inbox: open the link we sent to confirm, and you'll get a weekly digest when this garden is busy. 🌱</p> : (
           <form className="space-y-2" onSubmit={async (e) => {
             e.preventDefault();
             try { await getServices().followRoom(roomId, email); setDone(true); } catch (x) { setErr((x as Error).message); }

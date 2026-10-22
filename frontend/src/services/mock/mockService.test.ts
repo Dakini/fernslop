@@ -238,15 +238,18 @@ describe("identify, follow, realtime", () => {
     await expect(svc.identifyPlant(gif)).rejects.toThrow();
   });
 
-  it("follows without leaking the unsubscribe token and validates email", async () => {
+  it("follows unconfirmed, answers only room and email, confirms by token and validates email", async () => {
     const { svc } = setup();
     const room = await svc.createRoom({ name: "R" });
     await expect(svc.followRoom(room.id, "nope")).rejects.toThrow();
     const f = await svc.followRoom(room.id, "Me@Example.com");
-    expect(f.email).toBe("me@example.com");
-    expect(f).not.toHaveProperty("unsubscribe_token");
-    expect(await svc.followRoom(room.id, "me@example.com")).not.toHaveProperty("unsubscribe_token");
+    expect(f).toEqual({ room_id: room.id, email: "me@example.com" });
+    expect(await svc.followRoom(room.id, "me@example.com")).toEqual(f);
     const token = svc._db().room_follows[0]!.unsubscribe_token;
+    expect(svc._db().room_follows[0]!.confirmed_at).toBeFalsy();
+    expect(await svc.confirmFollow("nope")).toBe(false);
+    expect(await svc.confirmFollow(token)).toBe(true);
+    expect(await svc.confirmFollow(token)).toBe(true);
     expect(await svc.unfollow(token)).toBe(true);
     expect(await svc.unfollow(token)).toBe(false);
   });
