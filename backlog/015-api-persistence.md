@@ -30,3 +30,16 @@ Data and photos survive a restart when `FERNSLOP_DB_PATH` is set: a SQLite store
 
 **Engineer:** Added `backend/app/sqlite_store.py` (stdlib `sqlite3`, WAL, `BEGIN IMMEDIATE` plus an RLock; records as JSON next to a few indexed columns, photos in a BLOB) and `backend/app/photo_cleanup.py`. `get_store()` in `store.py` returns the SQLite store (cached per path) when `FERNSLOP_DB_PATH` is set, otherwise the in-memory `Store`. Seeding happens once, flagged in a `meta` table; `reset()` restores the seed. `transaction()` now rolls back on both stores (in-memory by snapshotting its dicts; nested use is decided by the outermost block). The existing `test_store.py` behaviour tests run against both stores via one `new_store` fixture; 5 new tests (rollback, 20 threads plus no half-transaction reads, restart persistence and no re-seed, two cleanup tests). `conftest.py` resets both the in-memory store and `get_store()`. The suite passes with and without `FERNSLOP_DB_PATH`. Note: `digest.main()` still uses the in-memory `store` (its tests patch `app.store.store`); pointing it at `get_store()` is a one-line follow-up for whoever picks that up.
 
+**QA:**
+
+## QA: PASS
+
+- [x] `get_store()` picks SQLite when `FERNSLOP_DB_PATH` is set, in-memory when unset; suite passes both ways - PASS
+- [x] A new store on the same file sees earlier writes (room edit, event, photo with byte-identical data); `GET /photos/{id}` after rebuild covered by suite - PASS
+- [x] Seed once, no re-seed on reopen (edited seeded room stayed edited after reopen); `reset()` covered by suite fixture - PASS (no seeded follows exist, so follow deletion was not exercised by hand)
+- [x] `transaction()` atomic on both stores: raised error undid two saves and still propagated; nested outer exit decides - PASS
+- [x] 20 threads read-count-save test and half-transaction reader test exist and pass on both stores - PASS
+- [x] `test_store.py` runs against both stores via one parametrised `new_store` fixture - PASS
+- [x] `python -m app.photo_cleanup`: deleted only the old unreferenced photo (old posted, young orphan and seeded photo stayed), printed "Deleted 1 photo(s)"; without `FERNSLOP_DB_PATH` it printed a message and exited 1 - PASS
+
+Tests: `uv run pytest`, 801 passed, 0 failed (also with `FERNSLOP_DB_PATH` set to a temp file: 801 passed). No hang in either run (~9s each; ran with a 120s watchdog since macOS has no `timeout`).
