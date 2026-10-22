@@ -17,7 +17,7 @@ import { CareRing, CARE_ICONS } from "@/components/garden/CareRing";
 import { copyShare } from "@/components/garden/CreateRoomDialog";
 import { DeleteGardenDialog } from "@/components/garden/DeleteGardenDialog";
 import { plantsQuery, roomQuery, useRoomLive } from "@/lib/queries";
-import { saveNickname, useIdentity } from "@/lib/identity";
+import { nicknameError, saveNickname, useIdentity } from "@/lib/identity";
 import { allCareStatuses, CARE_LABELS, type CareStatus } from "@/services/care";
 import { getServices, CARE_TYPES, type CareType, type Photo, type Plant, type PlantCategory, type RoomPlant } from "@/services";
 import { cn } from "@/lib/utils";
@@ -351,15 +351,24 @@ function PostBox({ onPost }: { onPost: (text: string, photoId: string | null) =>
 
 function NicknameChip({ name }: { name: string }) {
   const [v, setV] = useState("");
+  const [err, setErr] = useState<string | null>(null);
   return (
-    <Popover onOpenChange={(o) => o && setV(name)}>
+    <Popover onOpenChange={(o) => { if (o) { setV(name); setErr(null); } }}>
       <PopoverTrigger asChild>
         <button type="button" className="rounded-full bg-oat px-3 py-2 text-sm">You're <b className="text-moss">{name}</b> · <span className="underline">change</span></button>
       </PopoverTrigger>
       <PopoverContent className="rounded-2xl bg-cream">
-        <form className="space-y-2" onSubmit={(e) => { e.preventDefault(); saveNickname(v); toast.success("Nickname saved"); }}>
+        <form className="space-y-2" onSubmit={(e) => {
+          e.preventDefault();
+          const problem = v.trim() ? nicknameError(v.trim()) : null;
+          setErr(problem);
+          if (problem) return;
+          saveNickname(v);
+          toast.success("Nickname saved");
+        }}>
           <Label htmlFor="nick">Your nickname</Label>
-          <Input id="nick" value={v} maxLength={40} onChange={(e) => setV(e.target.value)} className="rounded-full" />
+          <Input id="nick" value={v} onChange={(e) => { setV(e.target.value); setErr(null); }} aria-invalid={!!err} aria-describedby={err ? "nick-error" : undefined} className="rounded-full" />
+          {err && <p id="nick-error" role="alert" className="text-xs text-destructive">{err}</p>}
           <Button type="submit" size="sm" className="w-full">Save</Button>
         </form>
       </PopoverContent>
