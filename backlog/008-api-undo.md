@@ -20,3 +20,15 @@
 ## Comments
 
 **Engineer:** Implemented `undoEvent` in `backend/app/routers/feed_events.py` (registered in `routers/__init__.py`), tests in `backend/app/test_feed_events.py` (32 tests, one or more per criterion). All checks (event exists, not already undone, has a payload, 50/10 limit) run before the first write inside one `store.transaction()`, so every 409 changes nothing. The limit applies only when the target is currently soft-deleted or missing and the snapshot is live (a move/care undo on a live plant is never blocked). Limit constants and messages are imported from the 006/007 routers (no refactor needed). `delete_plant` / `restore_area` with `area: null` on an already-deleted target keep the original `deleted_at` and still return 204 with `undone_at` set. Full suite: 737 passed. No criteria changed.
+
+## QA: PASS
+
+- [x] Success returns 204 empty; `undone_at` set, payload kept, event stays in feed, no new event, `last_activity_at` == `undone_at`, `live.notify` called once - PASS
+- [x] `restore_plant` writes snapshot back as-is (remove, move, care undone; an older snapshot overwrote newer edits) - PASS
+- [x] `delete_plant` / `restore_area` null soft-delete; already-deleted target stays deleted, 204 - PASS
+- [x] `restore_area` with an area restores it (area delete and rename undone) - PASS
+- [x] Post gives 409 `This can't be undone`; double undo 409 `Already undone`; full room (50 plants / 10 areas) gives the specified 409s with nothing changed, `undone_at` null, no notify; move undo on a live plant in a full room gives 204 - PASS
+- [x] Unknown and non-UUID id gives 404 `Event not found`; missing/malformed actor headers give 400; no state change, no notify - PASS
+- [x] Tests pass - PASS
+
+Tests: `uv run pytest`, 737 passed, 0 failed. Also spot-checked each criterion once with a throwaway script via the real 006/007/009 endpoints.
