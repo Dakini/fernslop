@@ -6,7 +6,7 @@ To add a router, create a module in this package and add its ``router`` to
 
 from fastapi import APIRouter
 
-from app.routers import areas, follows, health, photos, plants, posts, room_plants, rooms
+from app.routers import areas, feed_events, follows, health, photos, plants, posts, room_plants, rooms
 
 routers: list[APIRouter] = [
     health.router,
@@ -14,6 +14,7 @@ routers: list[APIRouter] = [
     rooms.router,
     room_plants.router,
     areas.router,
+    feed_events.router,
     follows.router,
     photos.router,
     posts.router,
