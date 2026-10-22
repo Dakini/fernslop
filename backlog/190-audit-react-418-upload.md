@@ -36,3 +36,22 @@ Verify commit `b32a780` (made outside the process): direct loads of `/` and `/r/
 - Criterion 6: added `e2e/test_post_photo.py` (one test, listed in `e2e/README.md`): a gardener posts text plus a JPEG and a second browser context sees the photo load in its feed live.
 
 Tests: `make test-e2e` 2 passed (own throwaway stack, removed afterwards); `cd backend && uv run pytest` 134 passed, 2 skipped.
+
+## QA: PASS
+
+Checked on my own throwaway compose stack (`fernslop-qa190`, port 8191, removed afterwards; the stack on :8000 was not touched) with a Playwright script in Chromium at 1280×800 and 390×844.
+
+- [x] `router.tsx` sets one `defaultPendingComponent` (`PagePending`) and no route sets its own `pendingComponent` - PASS
+      `grep` finds only `defaultPendingComponent: PagePending` in `frontend/src/router.tsx`.
+- [x] Direct loads of `/` and `/r/<seed room id>` log no #418 or hydration error and render - PASS
+      Both sizes: `/` shows "Gardens anyone can tend", `/r/<Elm Street Allotment id>` shows its heading; zero console errors or page errors.
+- [x] Same file twice in Add plant > Photo sends two `POST /api/plants/identify` and shows candidates both times - PASS
+      Both sizes: 2 requests counted, "Which one is it?" shown after each.
+- [x] Text plus JPEG, PNG or WebP: preview, post added, image loads from `/api/photos/{id}`, second browser sees it without reloading - PASS
+      All three formats at both sizes: preview shown, post added, `naturalWidth > 0` from `/api/photos/{id}` in the poster and in a second context that was never reloaded; no console errors.
+- [x] Over 5 MB / GIF / HEIC (also renamed to `.jpg`): right message, no spinner, no console error - PASS (with notes)
+      Tried a 5 MB+ JPEG, a GIF, a HEIC, a HEIC named `.jpg` and a GIF named `.jpg` on both inputs at both sizes. Every case shows the right text (`That photo is over 5 MB` / `Please use a JPG, PNG or WebP image`), no "Looking closely…" or "Uploading…" is left, and the app throws or logs nothing. Two differences from the wording, judged not broken: (a) identify shows the message as the inline status note in the Add plant dialog, not a toast (the post photo does use a toast); this is where the user is looking, so it is a presentation choice. (b) Chromium itself logs `Failed to load resource: ... 413/415` for each rejected request; that is the browser's network log for the server's rejection, not an app error. Both are already filed as [#211](211-audit-photo-reject-in-browser.md).
+- [x] One new e2e test in `e2e/` posts a photo and a second context sees it - PASS
+      Commit `41085cc` adds exactly one test, `e2e/test_post_photo.py`, which posts text plus a JPEG and checks the image loads in a second context's feed live; it passes.
+
+Tests: `make test-e2e` 2 passed (own throwaway stack, removed afterwards); `cd backend && uv run pytest` 134 passed, 2 skipped, 0 failed; `cd frontend && npm test` 40 passed (8 files), 0 failed.
