@@ -63,6 +63,14 @@ class Room(ApiModel):
     last_activity_at: Timestamp
 
 
+class RoomSummaryPlant(ApiModel):
+    """A plant dot on a room thumbnail."""
+
+    x_pct: Percent
+    y_pct: Percent
+    category: PlantCategory
+
+
 class RoomPlant(ApiModel):
     id: str
     room_id: str
@@ -127,6 +135,23 @@ class FeedEvent(ApiModel):
     undo_payload: UndoPayload | None
     undone_at: Timestamp | None
     created_at: Timestamp
+
+
+class RoomSummary(ApiModel):
+    """Just enough of a room to draw its thumbnail on the index page."""
+
+    room: Room
+    plants: list[RoomSummaryPlant]
+    areas: list[RoomArea]
+
+
+class RoomState(ApiModel):
+    """Everything needed to render a room."""
+
+    room: Room
+    plants: list[RoomPlant]
+    areas: list[RoomArea]
+    feed: list[FeedEvent]
 
 
 class RoomFollow(ApiModel):
