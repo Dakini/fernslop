@@ -35,6 +35,18 @@ def test_search_matches_scientific_name(client):
     assert [plant["id"] for plant in response.json()] == ["plant-strawberry"]
 
 
+def test_search_returns_at_most_12_matches_in_seed_order(client):
+    response = client.get("/api/plants/search", params={"q": "a"})
+
+    matches = [
+        plant.id
+        for plant in get_store().list_plants()
+        if "a" in plant.common_name.casefold() or "a" in plant.scientific_name.casefold()
+    ]
+    assert len(matches) > 12  # otherwise the cap is not exercised
+    assert [plant["id"] for plant in response.json()] == matches[:12]
+
+
 @pytest.mark.parametrize("q", [".*", "%"])
 def test_search_treats_the_query_as_a_literal_string(client, q):
     response = client.get("/api/plants/search", params={"q": q})

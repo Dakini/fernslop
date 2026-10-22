@@ -71,7 +71,7 @@ def test_delete_room_hides_the_room_from_the_api_but_keeps_all_its_data_after_a_
 
         assert (response.status_code, response.content) == (204, b"")
         assert api.get(f"/api/rooms/{room.id}").status_code == 404
-        listed = api.get("/api/rooms").json()
+        listed = api.get("/api/rooms").json()["rooms"]
         assert room.id not in [s["room"]["id"] for s in listed]
         assert all("deleted_at" not in s["room"] for s in listed)
         assert room.id not in {d.room_id for d in digest.build_digests(store, timestamps.now())}
@@ -223,5 +223,5 @@ def test_restore_brings_a_deleted_room_back_with_its_data_and_rejects_live_or_un
     assert out.err.count("No deleted room with id") == 3
     assert api.get(f"/api/rooms/{room.id}").json() == before
     assert [f.id for f in store.list_follows(room.id)] == ["f-back"]
-    assert [s["room"]["id"] for s in api.get("/api/rooms").json()].count(room.id) == 1
+    assert [s["room"]["id"] for s in api.get("/api/rooms").json()["rooms"]].count(room.id) == 1
     assert len(store.list_rooms()) == rooms_before + 1  # a seed garden comes back once, never re-seeded

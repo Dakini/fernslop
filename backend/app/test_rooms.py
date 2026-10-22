@@ -1,10 +1,13 @@
 import uuid
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import event
 
 from app.body import MAX_JSON_BODY_BYTES
 from app.main import app
+from app.models import Room
 from app.sql_store import SqlStore
 from app.store import get_store
 
@@ -36,7 +39,63 @@ def test_list_rooms_on_seed_returns_three_summaries_newest_activity_first(rooms_
     response = rooms_client.get("/api/rooms")
 
     assert response.status_code == 200
-    assert [summary["room"]["name"] for summary in response.json()] == SEED_ROOM_NAMES
+    assert [summary["room"]["name"] for summary in response.json()["rooms"]] == SEED_ROOM_NAMES
+    assert response.json()["next"] is None
+
+
+def add_rooms(store, count):
+    """``count`` rooms whose activity is older than the seed's, the first one most recent."""
+    start = datetime(2020, 1, 1, tzinfo=UTC)
+    for i in range(count):
+        at = start - timedelta(minutes=i)
+        store.save_room(Room(id=str(uuid.uuid4()), name=f"Plot {i}", description="", region="", created_at=at, last_activity_at=at))
+
+
+def count_queries(store, request):
+    statements = []
+    listen = lambda *args: statements.append(args[2])
+    event.listen(store._engine, "before_cursor_execute", listen)
+    try:
+        request()
+    finally:
+        event.remove(store._engine, "before_cursor_execute", listen)
+    return len(statements)
+
+
+def test_list_rooms_runs_as_many_queries_for_200_rooms_as_for_3(rooms_client, store):
+    few = count_queries(store, lambda: rooms_client.get("/api/rooms?limit=100"))
+    add_rooms(store, 197)
+
+    many = count_queries(store, lambda: rooms_client.get("/api/rooms?limit=100"))
+
+    assert many == few > 0
+
+
+def test_list_rooms_pages_through_every_live_room_once_skipping_deleted_ones(rooms_client, store):
+    add_rooms(store, 4)
+    deleted = seed_room_id(store, "Balcony Jungle")
+    rooms_client.delete(f"/api/rooms/{deleted}")
+    pages, before = [], None
+
+    while True:
+        body = rooms_client.get("/api/rooms", params={"limit": 2, **({"before": before} if before else {})}).json()
+        pages.append([summary["room"]["name"] for summary in body["rooms"]])
+        before = body["next"]
+        if before is None:
+            break
+
+    assert pages == [
+        ["Elm Street Allotment", "Orchard Corner"],
+        ["Plot 0", "Plot 1"],
+        ["Plot 2", "Plot 3"],
+    ]
+
+
+@pytest.mark.parametrize("query", ["limit=0", "limit=101", "limit=ten", "before=nonsense"])
+def test_list_rooms_with_a_bad_limit_or_cursor_gives_400(rooms_client, query):
+    response = rooms_client.get(f"/api/rooms?{query}")
+
+    assert response.status_code == 400
 
 
 # --- Create ----------------------------------------------------------------

@@ -4,11 +4,12 @@ import uuid
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Response
+from pydantic import BaseModel
 
 from app import live, timestamps
 from app.body import JsonBody
 from app.errors import ApiError
-from app.models import Room, RoomState, RoomSummary, RoomSummaryPlant
+from app.models import Room, RoomArea, RoomState, RoomSummary, RoomSummaryPlant
 from app.store import StoreProtocol, get_store
 from app.text import INVALID_CHARACTERS_MESSAGE, has_invalid_characters
 
@@ -40,22 +41,75 @@ def _checked(value: str, label: str, max_length: int) -> str:
     return value
 
 
-def _newest_first(room: Room) -> tuple:
-    return (room.last_activity_at, room.created_at)
+DEFAULT_PAGE_SIZE = 30
+MAX_PAGE_SIZE = 100
+LIMIT_MESSAGE = f"limit must be a whole number from 1 to {MAX_PAGE_SIZE}"
+CURSOR_MESSAGE = "before is not a cursor this server gave out"
+
+
+class RoomPage(BaseModel):
+    """One page of the index: ``next`` is the ``before`` cursor for the page after, or null on the last."""
+
+    rooms: list[RoomSummary]
+    next: str | None
+
+
+def _sort_key(room: Room) -> tuple[str, str, str]:
+    """Most recent activity first; formatted stamps sort like the times, the id breaks ties."""
+    stamp = timestamps.format_timestamp
+    return (stamp(room.last_activity_at), stamp(room.created_at), room.id)
+
+
+def _cursor(key: tuple[str, str, str]) -> str:
+    return "_".join(key)
+
+
+def _parse_cursor(before: str) -> tuple[str, str, str]:
+    parts = before.split("_", 2)
+    if len(parts) != 3 or not all(parts):
+        raise ApiError(400, CURSOR_MESSAGE)
+    return (parts[0], parts[1], parts[2])
+
+
+def _parse_limit(limit: str | None) -> int:
+    if limit is None:
+        return DEFAULT_PAGE_SIZE
+    if not limit.isdigit() or not 1 <= int(limit) <= MAX_PAGE_SIZE:
+        raise ApiError(400, LIMIT_MESSAGE)
+    return int(limit)
 
 
 @router.get("/rooms", operation_id="listRooms")
-def list_rooms(store: Annotated[StoreProtocol, Depends(get_store)]) -> list[RoomSummary]:
-    summaries = []
-    for room in sorted(store.list_rooms(), key=_newest_first, reverse=True):
-        plants = []
-        for room_plant in store.list_room_plants(room.id):
-            plant = store.get_plant(room_plant.plant_id)
-            if plant is None:  # reference row is gone: skip the dot rather than fail
-                continue
-            plants.append(RoomSummaryPlant(x_pct=room_plant.x_pct, y_pct=room_plant.y_pct, category=plant.category))
-        summaries.append(RoomSummary(room=room, plants=plants, areas=store.list_areas(room.id)))
-    return summaries
+def list_rooms(
+    store: Annotated[StoreProtocol, Depends(get_store)],
+    limit: str | None = None,
+    before: str | None = None,
+) -> RoomPage:
+    """A fixed number of queries per page: all room rows (sorted here, the sort key lives in JSON),
+    then the plants, plant categories and areas of just this page's rooms."""
+    size = _parse_limit(limit)
+    keyed = sorted(((_sort_key(room), room) for room in store.list_rooms()), key=lambda kr: kr[0], reverse=True)
+    if before is not None:
+        after = _parse_cursor(before)
+        keyed = [kr for kr in keyed if kr[0] < after]
+    page = keyed[:size]
+    room_ids = [room.id for _, room in page]
+    room_plants = store.list_room_plants_in(room_ids)
+    categories = {plant.id: plant.category for plant in store.get_plants({rp.plant_id for rp in room_plants})}
+    plants_by_room: dict[str, list[RoomSummaryPlant]] = {room_id: [] for room_id in room_ids}
+    for rp in room_plants:
+        if rp.plant_id in categories:  # reference row is gone: skip the dot rather than fail
+            plants_by_room[rp.room_id].append(
+                RoomSummaryPlant(x_pct=rp.x_pct, y_pct=rp.y_pct, category=categories[rp.plant_id])
+            )
+    areas_by_room: dict[str, list[RoomArea]] = {room_id: [] for room_id in room_ids}
+    for area in store.list_areas_in(room_ids):
+        areas_by_room[area.room_id].append(area)
+    summaries = [
+        RoomSummary(room=room, plants=plants_by_room[room.id], areas=areas_by_room[room.id]) for _, room in page
+    ]
+    more = len(keyed) > size
+    return RoomPage(rooms=summaries, next=_cursor(page[-1][0]) if more else None)
 
 
 @router.post("/rooms", operation_id="createRoom", status_code=201)

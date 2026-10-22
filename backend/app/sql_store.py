@@ -18,7 +18,7 @@ seeding an empty database is safe for stores starting at the same moment).
 """
 
 import threading
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from contextlib import AbstractContextManager, contextmanager
 from datetime import datetime
 from typing import TypeVar
@@ -261,6 +261,10 @@ class SqlStore:
     def get_plant(self, plant_id: str) -> Plant | None:
         return self._one(Plant, _plants, _plants.c.id == plant_id)
 
+    def get_plants(self, plant_ids: Collection[str]) -> list[Plant]:
+        """The plants with these ids, in one query (unknown ids are skipped)."""
+        return self._many(Plant, _plants, _plants.c.id.in_(set(plant_ids))) if plant_ids else []
+
     # --- Rooms ------------------------------------------------------------------
 
     def _stored_rooms(self, *where) -> list[StoredRoom]:
@@ -350,6 +354,13 @@ class SqlStore:
         plants = self._many(RoomPlant, _room_plants, _room_plants.c.room_id == room_id)
         return [p for p in plants if include_deleted or p.deleted_at is None]
 
+    def list_room_plants_in(self, room_ids: Collection[str]) -> list[RoomPlant]:
+        """Live plants of all these rooms, in one query."""
+        if not room_ids:
+            return []
+        plants = self._many(RoomPlant, _room_plants, _room_plants.c.room_id.in_(set(room_ids)))
+        return [p for p in plants if p.deleted_at is None]
+
     def get_room_plant(self, room_plant_id: str) -> RoomPlant | None:
         return self._one(RoomPlant, _room_plants, _room_plants.c.id == room_plant_id)
 
@@ -361,6 +372,13 @@ class SqlStore:
     def list_areas(self, room_id: str, *, include_deleted: bool = False) -> list[RoomArea]:
         areas = self._many(RoomArea, _areas, _areas.c.room_id == room_id)
         return [a for a in areas if include_deleted or a.deleted_at is None]
+
+    def list_areas_in(self, room_ids: Collection[str]) -> list[RoomArea]:
+        """Live areas of all these rooms, in one query."""
+        if not room_ids:
+            return []
+        areas = self._many(RoomArea, _areas, _areas.c.room_id.in_(set(room_ids)))
+        return [a for a in areas if a.deleted_at is None]
 
     def get_area(self, area_id: str) -> RoomArea | None:
         return self._one(RoomArea, _areas, _areas.c.id == area_id)
