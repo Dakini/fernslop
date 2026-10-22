@@ -10,11 +10,11 @@
 - [ ] `uv run pytest` passes on SQLite with no setup. With env `FERNSLOP_TEST_DATABASE_URL` set to a postgres URL, `conftest.py` runs the same suite on it (emptied between tests); Postgres-only tests are skipped when it is unset. The command to start a throwaway `postgres` container and run the suite is in `_docs/testing-guidelines.md`.
 - [ ] The Docker image, run with `FERNSLOP_DATABASE_URL` pointing at a throwaway postgres container, serves `/api/health` and the seeded `/api/rooms`.
 ## Out of scope
-- Alembic migrations (`create_all` stays): [#140](parked/140-db-migrations.md). Live updates across workers (image stays at one worker): [#090](parked/090-api-live-multi-worker.md). Compose files, serving frontend and API together: [#120](parked/120-api-deploy-together.md).
+- Alembic migrations (`create_all` stays): [#140](../parked/140-db-migrations.md). Live updates across workers (image stays at one worker): [#090](../parked/090-api-live-multi-worker.md). Compose files, serving frontend and API together: [#120](../parked/120-api-deploy-together.md).
 ## Constraints
 - Stay in `backend/` (`sql_store.py`, `store.py` docstring, `conftest.py`, `pyproject.toml`), the `Dockerfile` comment and `_docs/testing-guidelines.md`. No other new dependency; `StoreProtocol` gains no method. At most 5 new tests (`_docs/testing-guidelines.md`). Docker is available for the postgres container.
 ## Original request
-**What:** Run the SQLAlchemy store ([#016](done/016-db-sqlalchemy-store.md)) against Postgres: add the driver dependency, run the suite against it, and make `transaction()` exclusive across processes (e.g. row/advisory lock), since SQLite's `BEGIN IMMEDIATE` does that job today.
+**What:** Run the SQLAlchemy store ([#016](016-db-sqlalchemy-store.md)) against Postgres: add the driver dependency, run the suite against it, and make `transaction()` exclusive across processes (e.g. row/advisory lock), since SQLite's `BEGIN IMMEDIATE` does that job today.
 **Why:** Moved out of #016, which only makes the code database-agnostic and ships SQLite.
 **Edge cases:** Ordering by insertion (`seq`), case-insensitive email matching and BLOB/bytea photos must behave the same; connection pool settings.
 ## Comments
