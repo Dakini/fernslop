@@ -24,3 +24,5 @@ One script can no longer wipe, fill or flood the site: every write is rate limit
 - A new `backend/app/rate_limit.py` used as a FastAPI dependency on each write route (an explicit list, no catch-all middleware); the routers; `backend/conftest.py`; `Dockerfile` (CMD); `infra/ec2-stack.yaml`; `frontend/src/services/http/httpService.ts`; `openapi.yaml`.
 - Memory stays bounded: expired buckets are dropped, so many distinct IPs cannot grow it without limit. Thread-safe (sync routes run in the thread pool).
 - At most 5 tests; follow `_docs/testing-guidelines.md`.
+
+**User decision (2026-10-22):** the PM default numbers are approved as written (all overridable by env).

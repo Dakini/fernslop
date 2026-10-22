@@ -23,3 +23,5 @@ Caddy refuses oversize bodies and sends security headers, the AWS stack needs a 
 
 - `infra/ec2-stack.yaml`, `infra/deploy.sh`, `backend/app/main.py`, `frontend/src/services/http/httpService.ts`. Edge limits sit just above the app's (5 MB photo, 64 KB JSON), leaving room for multipart overhead.
 - After #192. At most 2 tests.
+
+**User decision (2026-10-22):** keep the `AllowPlainHttp=true` escape hatch; a domain is required by default.
