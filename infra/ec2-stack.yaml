@@ -1,0 +1,265 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Fernslop - one small EC2 instance running the app and Postgres with docker compose, fronted by Caddy,
+  with logs and a dashboard in CloudWatch. Plain HTTP on an Elastic IP by default; set DomainName for
+  automatic Let's Encrypt TLS. One instance only: the live SSE feed is in-process
+  (backlog/parked/090-api-live-multi-worker.md). Not a production setup: the database lives on the
+  instance's disk, so replacing the instance loses the data.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Default: vpc-0123456789abcdef0
+    Description: Default VPC
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Default: subnet-0123456789abcdef0
+    Description: Default subnet (eu-west-2a)
+  InstanceType:
+    Type: String
+    Default: t4g.micro
+    Description: ARM (the image is built for linux/arm64). t4g.nano (0.5 GB) is too small for the app plus Postgres.
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+  DomainName:
+    Type: String
+    Default: ""
+    Description: Optional. Its DNS must point at the Elastic IP; Caddy then gets a Let's Encrypt certificate for it.
+
+Conditions:
+  HasDomain: !Not [!Equals [!Ref DomainName, ""]]
+
+Resources:
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /fernslop/app
+      RetentionInDays: 14
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Fernslop - HTTP/HTTPS inbound only, no SSH (use SSM Session Manager)
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0 }
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0 }
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - { Effect: Allow, Principal: { Service: ec2.amazonaws.com }, Action: "sts:AssumeRole" }
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: pull-image-and-write-logs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - { Effect: Allow, Action: "ecr:GetAuthorizationToken", Resource: "*" }
+              - Effect: Allow
+                Action: [ecr:BatchCheckLayerAvailability, ecr:GetDownloadUrlForLayer, ecr:BatchGetImage]
+                Resource: !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/fernslop"
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: !GetAtt LogGroup.Arn
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref InstanceRole]
+
+  Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !Ref LatestAmiId
+      SubnetId: !Ref SubnetId
+      SecurityGroupIds: [!Ref SecurityGroup]
+      IamInstanceProfile: !Ref InstanceProfile
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs: { VolumeSize: 20, VolumeType: gp3, Encrypted: true }
+      Tags:
+        - { Key: Name, Value: fernslop }
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          # No -x: this script writes a generated Postgres password to disk. cloud-init logs to
+          # /var/log/cloud-init-output.log.
+          set -euo pipefail
+
+          echo "=== swap ==="
+          # 1 GB of RAM is shared by Postgres, the app and Caddy
+          fallocate -l 2G /swapfile
+          chmod 600 /swapfile
+          mkswap /swapfile
+          swapon /swapfile
+          echo '/swapfile none swap sw 0 0' >> /etc/fstab
+
+          echo "=== docker ==="
+          dnf install -y docker
+          systemctl enable --now docker
+          # Amazon Linux 2023's docker package ships no compose plugin
+          mkdir -p /usr/local/lib/docker/cli-plugins
+          curl -fsSL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$(uname -m)" \
+            -o /usr/local/lib/docker/cli-plugins/docker-compose
+          chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+          echo "=== compose files ==="
+          mkdir -p /opt/app
+          cd /opt/app
+
+          cat > docker-compose.yaml <<'COMPOSE'
+          x-logging: &logging
+            driver: awslogs
+            options:
+              awslogs-region: ${AWS::Region}
+              awslogs-group: ${LogGroup}
+              tag: "{{.Name}}"
+
+          services:
+            db:
+              image: postgres:17-alpine
+              env_file: .env
+              environment:
+                POSTGRES_USER: fernslop
+                POSTGRES_DB: fernslop
+              volumes:
+                - pgdata:/var/lib/postgresql/data
+              healthcheck:
+                test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U fernslop -d fernslop"]
+                interval: 5s
+                timeout: 3s
+                retries: 10
+                start_period: 10s
+              logging: *logging
+              restart: unless-stopped
+
+            app:
+              image: ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/fernslop:latest
+              env_file: .env
+              depends_on:
+                db:
+                  condition: service_healthy
+              logging: *logging
+              restart: unless-stopped
+
+            caddy:
+              image: caddy:2-alpine
+              env_file: .env
+              ports:
+                - "80:80"
+                - "443:443"
+              volumes:
+                - ./Caddyfile:/etc/caddy/Caddyfile:ro
+                - caddy_data:/data
+                - caddy_config:/config
+              depends_on:
+                - app
+              logging: *logging
+              restart: unless-stopped
+
+          volumes:
+            pgdata:
+            caddy_data:
+            caddy_config:
+          COMPOSE
+
+          cat > Caddyfile <<'CADDY'
+          {$SITE_ADDRESS} {
+              # -1 flushes immediately, which the live SSE stream needs
+              reverse_proxy app:8000 {
+                  flush_interval -1
+              }
+          }
+          CADDY
+
+          echo "=== environment ==="
+          umask 077
+          PGPASSWORD=$(openssl rand -hex 32)
+          {
+            echo "POSTGRES_PASSWORD=$PGPASSWORD"
+            echo "FERNSLOP_DATABASE_URL=postgresql+psycopg://fernslop:$PGPASSWORD@db:5432/fernslop"
+            if [ -n "${DomainName}" ]; then
+              echo "SITE_ADDRESS=${DomainName}"
+              echo "FERNSLOP_PUBLIC_URL=https://${DomainName}"
+            else
+              echo "SITE_ADDRESS=:80"
+              echo "FERNSLOP_PUBLIC_URL=http://${ElasticIp}"
+            fi
+          } > .env
+
+          echo "=== start ==="
+          aws ecr get-login-password --region ${AWS::Region} | \
+            docker login --username AWS --password-stdin ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com
+          docker compose up -d --pull always
+          echo "=== bootstrap complete ==="
+
+  ElasticIp:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  ElasticIpAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId: !GetAtt ElasticIp.AllocationId
+      InstanceId: !Ref Instance
+
+  # Replaces the instance's hardware if the host under it fails (no notification target needed)
+  RecoveryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Recover the Fernslop instance when the system status check fails
+      Namespace: AWS/EC2
+      MetricName: StatusCheckFailed_System
+      Dimensions: [{ Name: InstanceId, Value: !Ref Instance }]
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions: [!Sub "arn:aws:automate:${AWS::Region}:ec2:recover"]
+
+  Dashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: fernslop
+      DashboardBody: !Sub |
+        {"widgets": [
+          {"type": "metric", "x": 0, "y": 0, "width": 12, "height": 6, "properties": {
+            "title": "CPU (%) and CPU credit balance", "region": "${AWS::Region}", "stat": "Average", "period": 60,
+            "metrics": [
+              ["AWS/EC2", "CPUUtilization", "InstanceId", "${Instance}"],
+              ["AWS/EC2", "CPUCreditBalance", "InstanceId", "${Instance}", {"yAxis": "right"}]]}},
+          {"type": "metric", "x": 12, "y": 0, "width": 12, "height": 6, "properties": {
+            "title": "Network (bytes)", "region": "${AWS::Region}", "stat": "Sum", "period": 60,
+            "metrics": [
+              ["AWS/EC2", "NetworkIn", "InstanceId", "${Instance}"],
+              ["AWS/EC2", "NetworkOut", "InstanceId", "${Instance}"]]}},
+          {"type": "metric", "x": 0, "y": 6, "width": 12, "height": 6, "properties": {
+            "title": "Status checks failed", "region": "${AWS::Region}", "stat": "Maximum", "period": 60,
+            "metrics": [
+              ["AWS/EC2", "StatusCheckFailed_Instance", "InstanceId", "${Instance}"],
+              ["AWS/EC2", "StatusCheckFailed_System", "InstanceId", "${Instance}"]]}},
+          {"type": "log", "x": 0, "y": 12, "width": 24, "height": 8, "properties": {
+            "title": "Logs (app, db, caddy)", "region": "${AWS::Region}", "view": "table",
+            "query": "SOURCE '${LogGroup}' | fields @timestamp, @logStream, @message | sort @timestamp desc | limit 100"}}
+        ]}
+
+Outputs:
+  Url:
+    Value: !If [HasDomain, !Sub "https://${DomainName}", !Sub "http://${ElasticIp}"]
+  ElasticIp:
+    Value: !Ref ElasticIp
+  InstanceId:
+    Value: !Ref Instance
+  DashboardUrl:
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${Dashboard}"
+  LogGroupName:
+    Value: !Ref LogGroup
