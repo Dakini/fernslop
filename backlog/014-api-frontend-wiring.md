@@ -28,3 +28,10 @@ An HTTP implementation of `GardenService` (`frontend/src/services/types.ts`) tal
 **Edge cases:** Percent-encode the actor name header. Configure the base URL, a dev proxy or CORS. Use EventSource for `/live`.
 
 ## Comments
+
+### Engineer: implemented
+- `frontend/src/services/http/httpService.ts` implements `GardenService` over `fetch`/`EventSource` per `openapi.yaml`; `services/index.ts` picks it when `VITE_USE_MOCK=false` (base from `VITE_API_BASE_URL`, default `/api`, trailing slash stripped), otherwise the mock. Both variables are in `frontend/README.md`. `vite.config.ts` proxies `/api` to `http://localhost:8000` in dev.
+- Relative photo URLs (`Photo.url`, `FeedEvent.photo_url` in `getRoomState`/`postUpdate`) are prefixed with the base's origin when the base is absolute (`/api/photos/{id}` becomes `https://host/api/photos/{id}`; prefixing the full base would double `/api`).
+- 5 tests in `src/services/http/httpService.test.ts` (selection, request shape and actor headers, result mapping, errors, SSE). `npm test`: 30 passed. `npm run build` passes.
+- Lint: `eslint` is clean on the files I touched, but `npm run lint` over the whole repo already fails with ~980 prettier errors in untouched files (e.g. `types.ts`, `start.ts`); I did not reformat them.
+- Manual check, done with curl, not a browser: backend on :8000 plus `VITE_USE_MOCK=false vite dev`; through the Vite proxy I created a room, added a plant with a percent-encoded `Zoë 🌿` header (stored as `Zoë 🌿`), and the `/live` stream sent `event: change` for that room. I did not click through the UI in two tabs.
