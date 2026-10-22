@@ -1,7 +1,10 @@
+from datetime import UTC, datetime
+
 import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app, create_app
+from app.models import Room
 from app.routers import routers
 from app.store import Store, get_store, store
 
@@ -53,6 +56,12 @@ def test_paths_without_the_api_prefix_are_not_served(client, path):
 
 
 # --- Generated docs ----------------------------------------------------------
+
+
+def test_openapi_json_lists_no_paths_until_routes_are_added(client):
+    response = client.get("/api/openapi.json")
+
+    assert response.json()["paths"] == {}
 
 
 def test_openapi_json_is_served_under_the_api_prefix(client):
@@ -144,25 +153,30 @@ def test_cors_origins_env_var_overrides_the_defaults(monkeypatch):
 # --- Store -------------------------------------------------------------------
 
 
+def make_room(id: str) -> Room:
+    now = datetime(2026, 10, 22, 9, 30, tzinfo=UTC)
+    return Room(id=id, name="Scratch", description="", region="", created_at=now, last_activity_at=now)
+
+
 def test_get_store_returns_the_module_level_store():
     assert get_store() is store
     assert isinstance(get_store(), Store)
 
 
 def test_store_reset_drops_state_added_after_creation():
-    store.scratch = "mutated"
+    store.save_room(make_room("scratch-room"))
 
     store.reset()
 
-    assert not hasattr(store, "scratch")
+    assert store.get_room("scratch-room") is None
 
 
 def test_store_state_mutated_in_one_test_is_visible_within_that_test():
-    # Pairs with the next test: the mutation made here must not leak into it.
-    store.leaky = "from the first test"
+    # Pairs with the next test: the room saved here must not leak into it.
+    store.save_room(make_room("leaky-room"))
 
-    assert store.leaky == "from the first test"
+    assert store.get_room("leaky-room") is not None
 
 
 def test_store_state_from_the_previous_test_does_not_leak_into_this_one():
-    assert not hasattr(store, "leaky")
+    assert store.get_room("leaky-room") is None
