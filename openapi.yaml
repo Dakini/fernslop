@@ -451,7 +451,8 @@ paths:
         Creates a `post` feed event with no undo payload. `text` is trimmed and at least one of
         `text` and `photo_id` must be non-empty. The photo must already be uploaded with
         `POST /photos`. The server copies that photo's `url` into the event's `photo_url`,
-        so clients can't put arbitrary URLs in the feed.
+        so clients can't put arbitrary URLs in the feed. A photo can be in one post only:
+        upload it again to post it again.
       security: [{ actor: [] }]
       parameters:
         - $ref: "#/components/parameters/RoomId"
@@ -478,7 +479,8 @@ paths:
         "400":
           description: |
             Both text and photo are empty (message `Write something or add a photo`), or
-            `photo_id` doesn't match an uploaded photo (message `That photo didn't upload — try again`).
+            `photo_id` doesn't match an uploaded photo (message `That photo didn't upload — try again`),
+            or that photo is already in a post, in any room (message `That photo is already in a post`).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -497,6 +499,12 @@ paths:
         `photo_id` when posting. The mock stores the image in browser storage and
         returns a `data:` URL. A real backend should return `/api/photos/{id}` or an
         object-storage URL. Photos that are never posted can be cleaned up later.
+
+        Metadata is removed before the photo is stored: EXIF (GPS position, camera,
+        dates), XMP, IPTC, comments and PNG text chunks. The EXIF orientation is applied
+        to the pixels first, so the photo still displays upright. The type stays the same,
+        and an ICC colour profile, transparency and animation are kept. A photo without
+        metadata is stored unchanged. The 5 MB limit applies to the file as sent.
       requestBody:
         required: true
         content:
@@ -524,7 +532,9 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "415":
-          description: File is not JPEG, PNG or WebP. Message is `Please use a JPG, PNG or WebP image`.
+          description: |
+            File is not JPEG, PNG or WebP, cannot be decoded as one, or has more pixels than
+            the server's decompression-bomb limit. Message is `Please use a JPG, PNG or WebP image`.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -538,6 +548,10 @@ paths:
         The image bytes with their original content type. The frontend only uses this
         through `Photo.url` and `FeedEvent.photo_url`, never by building the path itself.
         Photo ids are unguessable UUIDs, so responses can be cached publicly and indefinitely.
+        The image carries no metadata (see `uploadPhoto`; photos stored earlier are stripped
+        in place by `python -m app.photo_strip`). Responses also send
+        `X-Content-Type-Options: nosniff` and `Content-Disposition: inline`, so a browser only
+        shows them as their image type.
       parameters:
         - name: photoId
           in: path

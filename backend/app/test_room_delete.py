@@ -97,7 +97,8 @@ def test_delete_room_removes_photos_only_that_room_used_and_keeps_shared_and_unp
         store.save_photo(photo)
     post_with_photo(api, room.id, only_here)
     post_with_photo(api, room.id, shared)
-    post_with_photo(api, other.id, shared)
+    # Posting a photo twice is now refused (#199), but posts from before that can still share one.
+    store.save_feed_event(make_event(id="ev-shared", room_id=other.id, photo_url=shared.url))
 
     assert api.delete(f"/api/rooms/{room.id}").status_code == 204
 

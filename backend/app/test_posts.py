@@ -1,18 +1,30 @@
+import io
 import uuid
 from contextlib import contextmanager
 from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 
 from app import live
 from app.main import app
+from app.seed import seed_id
 from app.sql_store import SqlStore
 from app.store import get_store
 
 HEADERS = {"X-Device-Id": "device-1", "X-Actor-Name": "Tess"}
 MISSING_ID = "00000000-0000-4000-8000-000000000000"
-JPEG = b"\xff\xd8\xff\xe0" + b"jpeg-body"
+SEED_PHOTO_ID = seed_id("photo:elm-street-harvest")
+
+
+def make_jpeg():
+    out = io.BytesIO()
+    Image.new("RGB", (2, 2), "green").save(out, "JPEG")
+    return out.getvalue()
+
+
+JPEG = make_jpeg()
 EMPTY_MESSAGE = "Write something or add a photo"
 PHOTO_MESSAGE = "That photo didn't upload — try again"
 LONG_MESSAGE = "Text must be at most 1000 characters"
@@ -110,6 +122,8 @@ def test_post_with_photo_copies_the_photos_url(api, store):
         ({"text": "a" * 1001, "photo_id": None}, LONG_MESSAGE),
         ({"text": 5, "photo_id": None}, "text must be a string"),
         ({"text": "Hi", "photo_id": MISSING_ID}, PHOTO_MESSAGE),
+        # The seed post already shows this photo; any post using a photo blocks reuse (audit finding 14).
+        ({"text": "Hi", "photo_id": SEED_PHOTO_ID}, "That photo is already in a post"),
         # A right-to-left override can disguise what the line says (audit finding 3).
         ({"text": "Hi \u202egnp.exe", "photo_id": None}, "Text contains invalid characters"),
     ],

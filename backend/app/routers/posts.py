@@ -31,6 +31,17 @@ TEXT_TOO_LONG_MESSAGE = f"Text must be at most {TEXT_MAX_LENGTH} characters"
 BAD_TEXT_MESSAGE = "text must be a string"
 BAD_CHARACTERS_MESSAGE = INVALID_CHARACTERS_MESSAGE.format(label="Text")
 BAD_PHOTO_MESSAGE = "That photo didn't upload — try again"
+PHOTO_IN_USE_MESSAGE = "That photo is already in a post"
+
+
+def _photo_in_a_post(store: StoreProtocol, photo_url: str) -> bool:
+    """Whether any post in any room (undone ones included) already shows this photo.
+
+    Reads every room's feed through ``StoreProtocol``; a store lookup by ``photo_url`` would be cheaper.
+    """
+    return any(
+        event.photo_url == photo_url for room in store.list_rooms() for event in store.list_feed_events(room.id)
+    )
 
 
 @router.post("/rooms/{room_id}/posts", operation_id="postUpdate", status_code=201)
@@ -68,6 +79,8 @@ def post_update(
             photo = store.get_photo(photo_id)
             if photo is None:
                 raise ApiError(400, BAD_PHOTO_MESSAGE)
+            if _photo_in_a_post(store, photo.url):
+                raise ApiError(400, PHOTO_IN_USE_MESSAGE)
             photo_url = photo.url
         elif not text:
             raise ApiError(400, EMPTY_POST_MESSAGE)
