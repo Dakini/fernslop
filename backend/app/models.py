@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, PlainSerializer
+from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, field_validator
 
 from app.timestamps import format_timestamp
 
@@ -98,6 +98,53 @@ class RoomArea(ApiModel):
     h_pct: Percent
     colour: AreaColour
     deleted_at: Timestamp | None
+
+
+AREA_LABEL_MAX_LENGTH = 40
+AREA_LABEL_REQUIRED_MESSAGE = "An area needs a label"
+AREA_LABEL_TOO_LONG_MESSAGE = f"An area label can be at most {AREA_LABEL_MAX_LENGTH} characters"
+
+# Unlike plant coordinates, area numbers are rejected (400) outside range, never clamped.
+# Strict: a string, boolean or null is not coerced into a number.
+AreaPosition = Annotated[float, Field(strict=True, ge=0, le=100)]
+AreaSize = Annotated[float, Field(strict=True, gt=0, le=100)]
+
+
+def _check_area_label(value: str) -> str:
+    label = value.strip()
+    if not label:
+        raise ValueError(AREA_LABEL_REQUIRED_MESSAGE)
+    if len(label) > AREA_LABEL_MAX_LENGTH:
+        raise ValueError(AREA_LABEL_TOO_LONG_MESSAGE)
+    return label
+
+
+class AreaInput(ApiModel):
+    """Request body of ``addArea``. Unknown fields are ignored."""
+
+    label: Annotated[str, Field(strict=True)]
+    shape: AreaShape
+    x_pct: AreaPosition
+    y_pct: AreaPosition
+    w_pct: AreaSize
+    h_pct: AreaSize
+    colour: AreaColour
+
+    _trim_label = field_validator("label")(_check_area_label)
+
+
+class AreaPatch(ApiModel):
+    """Request body of ``updateArea``. Read ``model_fields_set`` to see what was sent; null is invalid."""
+
+    label: Annotated[str, Field(strict=True)] = None  # type: ignore[assignment]
+    shape: AreaShape = None  # type: ignore[assignment]
+    x_pct: AreaPosition = None  # type: ignore[assignment]
+    y_pct: AreaPosition = None  # type: ignore[assignment]
+    w_pct: AreaSize = None  # type: ignore[assignment]
+    h_pct: AreaSize = None  # type: ignore[assignment]
+    colour: AreaColour = None  # type: ignore[assignment]
+
+    _trim_label = field_validator("label")(_check_area_label)
 
 
 class RestorePlantPayload(ApiModel):
