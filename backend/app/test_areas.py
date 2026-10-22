@@ -174,6 +174,20 @@ def test_update_area_writes_one_event_whose_undo_payload_holds_the_area_before(a
     assert store.get_room(room_id).last_activity_at == event.created_at
 
 
+def test_rename_area_to_a_label_with_a_right_to_left_override_returns_400_and_writes_nothing(api, store, notify):
+    # U+202E can make one label read as another (audit finding 3, #193).
+    room_id = room_id_of(store)
+    area = make_area(store, room_id)
+    before = snapshot(store, room_id)
+
+    response = api.patch(f"/api/areas/{area.id}", json={"label": "Veg\u202ebed"}, headers=HEADERS)
+
+    assert response.status_code == 400
+    assert response.json() == {"message": "An area label contains invalid characters"}
+    assert snapshot(store, room_id) == before
+    notify.assert_not_called()
+
+
 # --- Delete ------------------------------------------------------------------
 
 
