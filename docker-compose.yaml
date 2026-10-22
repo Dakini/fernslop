@@ -1,0 +1,29 @@
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: fernslop
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fernslop}
+      POSTGRES_DB: fernslop
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fernslop -d fernslop"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      FERNSLOP_DATABASE_URL: postgresql+psycopg://fernslop:${POSTGRES_PASSWORD:-fernslop}@db:5432/fernslop
+    ports:
+      - "${APP_PORT:-8000}:8000"
+
+volumes:
+  pgdata:
