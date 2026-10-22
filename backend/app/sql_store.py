@@ -12,7 +12,9 @@ position. Photos live in a binary column.
 One lock per store object. ``transaction()`` holds it together with one database
 transaction on one connection, so it is exclusive within the process and a reader
 outside a transaction waits instead of seeing half of one. Across processes the
-database's own locking applies (on SQLite, ``BEGIN IMMEDIATE`` plus a busy timeout).
+database takes over: on SQLite ``BEGIN IMMEDIATE`` plus a busy timeout, on PostgreSQL a
+transaction-level advisory lock taken as each transaction begins (so creating the tables and
+seeding an empty database is safe for stores starting at the same moment).
 """
 
 import threading
@@ -101,11 +103,16 @@ _DATA_TABLES = (_plants, _rooms, _room_plants, _areas, _feed_events, _follows, _
 
 # --- Connection setup -----------------------------------------------------------
 
+_POSTGRES_LOCK_KEY = 7_130_001  # arbitrary; the advisory lock key every Fernslop transaction takes
+
 
 def _make_engine(url: str) -> Engine:
-    """The one place that knows about SQLite quirks; other databases get a plain engine."""
+    """The one place that knows about database quirks (SQLite, PostgreSQL); others get a plain engine."""
     parsed = make_url(url)
-    if parsed.get_backend_name() != "sqlite":
+    backend = parsed.get_backend_name()
+    if backend == "postgresql":
+        return _make_postgres_engine(url)
+    if backend != "sqlite":
         return create_engine(url)
 
     options: dict = {"connect_args": {"check_same_thread": False, "timeout": 30}}
@@ -127,6 +134,19 @@ def _make_engine(url: str) -> Engine:
     def _on_begin(connection):
         # Take the write lock up front, so a transaction never fails halfway with "database is locked".
         connection.exec_driver_sql("BEGIN IMMEDIATE")
+
+    return engine
+
+
+def _make_postgres_engine(url: str) -> Engine:
+    # pre-ping replaces connections the server or a proxy has closed while idle in the pool.
+    engine = create_engine(url, pool_pre_ping=True)
+
+    @event.listens_for(engine, "begin")
+    def _on_begin(connection):
+        # The counterpart of SQLite's BEGIN IMMEDIATE: one transaction at a time across all processes.
+        # The lock is released by the database when the transaction ends, however it ends.
+        connection.exec_driver_sql(f"SELECT pg_advisory_xact_lock({_POSTGRES_LOCK_KEY})")
 
     return engine
 

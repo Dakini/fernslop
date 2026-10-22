@@ -9,7 +9,7 @@ Configuration: the database is the SQLAlchemy URL in the environment variable
 ``FERNSLOP_DATABASE_URL``. Unset, it is ``sqlite:///fernslop.db`` (a file in the
 working directory, created on first use and ignored by git), so data survives
 restarts. Example for another database: ``postgresql+psycopg://user:pw@host/db``
-(needs its driver installed; see backlog #130).
+(the ``psycopg`` v3 driver is a dependency).
 """
 
 import os

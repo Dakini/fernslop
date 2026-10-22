@@ -172,3 +172,23 @@ The sections above describe the Django setup. The FastAPI backend in
   `form.errors`. Validation failures are 400 (422 only for `markCare`).
 - Naming, Arrange/Act/Assert, section banners and "test observable
   behaviour" apply unchanged. Tests live next to the code in `backend/app/`.
+
+### Running the backend suite on Postgres
+
+`uv run pytest` runs on in-memory SQLite and needs no setup. To run the same
+suite on Postgres, start a throwaway container and set
+`FERNSLOP_TEST_DATABASE_URL`:
+
+```bash
+docker run -d --rm --name fernslop-pg -e POSTGRES_PASSWORD=pw -e POSTGRES_DB=fernslop -p 55432:5432 postgres:17-alpine
+cd backend
+FERNSLOP_TEST_DATABASE_URL=postgresql+psycopg://postgres:pw@localhost:55432/fernslop uv run pytest
+docker stop fernslop-pg
+```
+
+With it set, `conftest.py` empties that database before every test (`DROP
+SCHEMA public CASCADE`) and points both `FERNSLOP_DATABASE_URL` and every
+`SqlStore("sqlite://")` a test builds at it. The test database is wiped, so
+never point it at data you care about. Tests that only make sense on Postgres
+carry the `requires_postgres` marker from `conftest.py` and are skipped when
+the variable is unset.

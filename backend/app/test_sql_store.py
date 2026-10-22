@@ -1,5 +1,6 @@
 import threading
 
+from conftest import TEST_DATABASE_URL, requires_postgres
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -103,3 +104,58 @@ def test_twenty_threads_each_reading_the_count_and_saving_in_a_transaction_end_w
 
     assert errors == []
     assert sorted(int(room.name) for room in s.list_rooms()) == list(range(20))
+
+
+# --- Postgres (skipped unless FERNSLOP_TEST_DATABASE_URL is set) -----------------
+
+
+@requires_postgres
+def test_two_stores_starting_at_the_same_moment_on_an_empty_postgres_seed_it_once():
+    stores, errors = [], []
+    barrier = threading.Barrier(2)
+
+    def start():
+        try:
+            barrier.wait()
+            stores.append(SqlStore(TEST_DATABASE_URL))
+        except Exception as error:
+            errors.append(error)
+
+    threads = [threading.Thread(target=start) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    restarted = SqlStore(TEST_DATABASE_URL)
+
+    assert errors == []
+    assert [len(s.list_rooms()) for s in (*stores, restarted)] == [3, 3, 3]
+    assert len(restarted.list_plants()) == 51
+    for s in (*stores, restarted):
+        s.dispose()
+
+
+@requires_postgres
+def test_ten_threads_on_each_of_two_postgres_stores_reading_the_count_and_saving_end_with_twenty_records():
+    stores = [SqlStore(TEST_DATABASE_URL, seed=False), SqlStore(TEST_DATABASE_URL, seed=False)]
+    errors = []
+
+    def add_one(number):
+        s = stores[number % 2]  # separate stores: only the database can keep them exclusive
+        try:
+            with s.transaction():
+                count = len(s.list_rooms())
+                s.save_room(make_room(f"room-{number}", name=str(count)))
+        except Exception as error:
+            errors.append(error)
+
+    threads = [threading.Thread(target=add_one, args=(n,)) for n in range(20)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    assert sorted(int(room.name) for room in stores[0].list_rooms()) == list(range(20))
+    for s in stores:
+        s.dispose()
