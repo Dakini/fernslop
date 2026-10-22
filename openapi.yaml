@@ -34,6 +34,10 @@ info:
     so the action can be undone. Rows with `deleted_at` set are never returned by
     the read endpoints.
 
+    Rooms are the exception: `deleteRoom` hard-deletes a room and everything in it
+    (plants, areas, feed events, follows, and photos only that room's posts used).
+    It cannot be undone.
+
     ## Room identity and limits
     Rooms are identified by a server-generated UUID (`Room.id`), which is also the
     public URL segment (`/r/{roomId}`). Rooms have no slugs, so two rooms can have the
@@ -122,6 +126,27 @@ paths:
               schema: { $ref: "#/components/schemas/RoomState" }
         "404":
           description: No room with this id. The frontend shows its "garden not found" page.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+    delete:
+      tags: [Rooms]
+      operationId: deleteRoom
+      x-service-method: deleteRoom
+      summary: Delete a room for good (hard delete)
+      description: |
+        Permanently deletes the room and all its plants (including removed ones), areas,
+        feed events (including undone ones) and follows; a follow's old unsubscribe link
+        then answers "already unsubscribed". A photo only this room's posts use is deleted
+        too. Open `/rooms/{roomId}/live` streams get a final `change` message and end.
+        Anyone with the link can call it: no actor headers.
+      parameters:
+        - $ref: "#/components/parameters/RoomId"
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: No room with this id (also for a second delete or an id that is not a UUID).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }

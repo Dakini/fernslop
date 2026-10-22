@@ -1,12 +1,12 @@
-"""Rooms: list, create and get state."""
+"""Rooms: list, create, get state and delete."""
 
 import json
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Request, Response
 
-from app import timestamps
+from app import live, timestamps
 from app.errors import ApiError
 from app.models import Room, RoomState, RoomSummary, RoomSummaryPlant
 from app.store import StoreProtocol, get_store
@@ -100,3 +100,13 @@ def get_room_state(room_id: str, store: Annotated[StoreProtocol, Depends(get_sto
         areas=store.list_areas(room.id),
         feed=store.list_feed_events(room.id),
     )
+
+
+@router.delete("/rooms/{room_id}", operation_id="deleteRoom", status_code=204)
+def delete_room(room_id: str, store: Annotated[StoreProtocol, Depends(get_store)]) -> Response:
+    """Hard-delete the room and everything in it. Needs no actor headers."""
+    with store.transaction():
+        if not store.delete_room(room_id):
+            raise ApiError(404, ROOM_NOT_FOUND_MESSAGE)
+    live.close_room(room_id)  # only now that the delete has committed
+    return Response(status_code=204)

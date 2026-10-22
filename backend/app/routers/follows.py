@@ -61,6 +61,8 @@ async def follow_room(
     email = _clean_email(body.get("email"))
 
     with store.transaction():
+        if store.get_room(room_id) is None:  # deleted since the check above
+            raise ApiError(404, ROOM_NOT_FOUND_MESSAGE)
         existing = store.get_follow_by_email(room_id, email)
         if existing is not None:
             response.status_code = 200

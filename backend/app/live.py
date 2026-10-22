@@ -28,6 +28,7 @@ class _Subscriber:
         self.loop = asyncio.get_running_loop()
         # One slot: notifies the stream has not read yet merge into a single message.
         self.queue: asyncio.Queue[None] = asyncio.Queue(maxsize=1)
+        self.closed = False
 
     def deliver(self) -> None:
         """Runs on the subscriber's own loop."""
@@ -35,6 +36,11 @@ class _Subscriber:
             self.queue.put_nowait(None)
         except asyncio.QueueFull:
             pass
+
+    def close(self) -> None:
+        """Runs on the subscriber's own loop: send one last ``change`` and end the stream."""
+        self.closed = True
+        self.deliver()
 
 
 _lock = threading.Lock()
@@ -80,6 +86,23 @@ def notify(room_id: str) -> None:
             logger.exception("Could not notify a live subscriber of room %s", room_id)
 
 
+def close_room(room_id: str) -> None:
+    """End every stream of ``room_id`` after one last ``change`` message (the room was deleted).
+
+    Call it after the delete has committed. The streams are dropped from the count at once. Safe to
+    call from any thread, and never raises.
+    """
+    with _lock:
+        subscribers = _subscribers.pop(room_id, [])
+    for subscriber in subscribers:
+        try:
+            subscriber.loop.call_soon_threadsafe(subscriber.close)
+        except RuntimeError:  # that stream's loop has closed
+            continue
+        except Exception:
+            logger.exception("Could not close a live subscriber of room %s", room_id)
+
+
 def ping_seconds() -> float:
     """The ping interval from ``FERNSLOP_SSE_PING_SECONDS``; unset, non-numeric or <= 0 gives 25."""
     try:
@@ -104,5 +127,7 @@ async def event_stream(room_id: str) -> AsyncIterator[str]:
                 yield PING_FRAME
             else:
                 yield f"event: change\ndata: {room_id}\n\n"
+                if subscriber.closed:
+                    return
     finally:
         _unsubscribe(subscriber)

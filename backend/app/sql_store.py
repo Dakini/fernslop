@@ -263,6 +263,31 @@ class SqlStore:
     def save_room(self, room: Room) -> None:
         self._save(_rooms, room)
 
+    def delete_room(self, room_id: str) -> bool:
+        """Hard-delete a room with its plants, areas, feed events and follows, in one transaction.
+
+        Photos that only this room's feed events point at go too; a photo another room's event also
+        points at, or one no event points at, stays. Returns whether the room existed.
+        """
+        with self._tx() as conn:
+            if conn.execute(delete(_rooms).where(_rooms.c.id == room_id)).rowcount == 0:
+                return False
+            photo_urls = (
+                conn.execute(
+                    select(_feed_events.c.photo_url).where(
+                        _feed_events.c.room_id == room_id, _feed_events.c.photo_url.is_not(None)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for table in (_room_plants, _areas, _feed_events, _follows):
+                conn.execute(delete(table).where(table.c.room_id == room_id))
+            if photo_urls:
+                still_used = exists().where(_feed_events.c.photo_url == _photos.c.url)
+                conn.execute(delete(_photos).where(_photos.c.url.in_(set(photo_urls)), ~still_used))
+            return True
+
     # --- Room plants ------------------------------------------------------------
 
     def list_room_plants(self, room_id: str, *, include_deleted: bool = False) -> list[RoomPlant]:
