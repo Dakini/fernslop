@@ -15,7 +15,11 @@ from app.body import JsonBody
 from app.errors import ApiError
 from app.models import FeedEvent
 from app.store import StoreProtocol, get_store
-from app.text import INVALID_CHARACTERS_MESSAGE, has_invalid_characters, normalise_newlines
+from app.text import (
+    INVALID_CHARACTERS_MESSAGE,
+    has_invalid_characters,
+    normalise_newlines,
+)
 
 router = APIRouter(tags=["Feed"])
 
