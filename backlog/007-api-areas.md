@@ -30,3 +30,17 @@
 ## Comments
 
 - Engineer: implemented `addArea`, `updateArea` and `deleteArea` in `backend/app/routers/areas.py` (registered in `routers/__init__.py`), with `AreaInput`/`AreaPatch` request models in `models.py` (strict types, trimmed label, percents rejected outside 0-100, `w_pct`/`h_pct` > 0) and tests in `backend/app/test_areas.py`. All criteria implemented unchanged; `uv run pytest` passes (643 tests). Interpretation notes: a label over 40 characters is measured after trimming (message `An area label can be at most 40 characters`); a PATCH value is "identical" when it equals the stored value after trimming the label, so a PATCH of only identical values returns 200 with no event, activity bump or `notify`; fields in a PATCH that equal the current value are ignored when choosing the event text; the body is validated before the room/area lookup, so an invalid body for an unknown id gives 400, as in 006.
+
+## QA: PASS
+
+- [x] POST valid AreaInput: 201, RoomArea (UUID4 id, room_id, deleted_at null, trimmed label), in GET room, one event `added the area "Veg bed"` with actor name and device id, undo `{kind: restore_area, area: null, area_id}`, `last_activity_at` equals the event's `created_at` - PASS
+- [x] POST 400 (never 422), nothing written, for missing field, blank label (`An area needs a label`), label over 40, unknown shape/colour, percents outside 0-100 (not clamped), w/h of 0, string/null numbers, non-JSON, non-object body; unknown or non-UUID room 404 `Room not found` - PASS
+- [x] 11th live area 409 `This garden has the maximum 10 areas`, nothing written; with 10 areas and one soft-deleted, one more is accepted, then 409 again - PASS
+- [x] PATCH changes only the sent fields, returns 200 with the full RoomArea, one event whose undo payload is the whole area before the change; text rename / resized / moved / changed, first match wins (checked combined bodies such as label+resize, resize+move, move+colour) - PASS
+- [x] PATCH 400 with area unchanged and no event/notify for empty body, unknown-only fields, null values, and each invalid value from the POST rules; identical values (also with a padded label or an int-vs-float percent) give 200 with no event, no activity bump, no notify; unknown, non-UUID or soft-deleted area 404 `Area not found` - PASS
+- [x] DELETE 204 with empty body, area gone from GET room, one event `removed the area "<label>"` with the pre-delete area as undo payload; second delete and unknown or non-UUID id give 404 `Area not found` - PASS
+- [x] All three require actor headers (400 for none, missing or blank device id, missing or blank name; nothing written or notified); each success bumps `last_activity_at` and calls `live.notify(room_id)` once; no failure (400/404/409) does - PASS
+
+Tests: `uv run pytest`, 682 passed, 1 failed (`app/test_identify.py::test_plantnet_httpx_request_log_line_has_the_key_redacted`, issue 012's in-progress work, unrelated to areas); `uv run pytest app/test_areas.py`, 91 passed, 0 failed. Also ran my own throwaway script exercising every case above against a fresh injected `Store` (103 checks, all matching the criteria).
+
+Note (not a criterion): `Store.transaction()` does not roll back, so if saving the feed event raised after `save_area`, the area change would persist without an event. This is the store's documented behaviour from issue 002, not a 007 defect.
