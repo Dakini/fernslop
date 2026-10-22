@@ -12,9 +12,35 @@ import { getServices } from "@/services";
 export function shareUrl(roomId: string) {
   return `${window.location.origin}/r/${roomId}`;
 }
-export function copyShare(roomId: string) {
-  navigator.clipboard?.writeText(shareUrl(roomId));
-  toast.success("Link copied — send it to your fellow gardeners");
+/** `navigator.clipboard` is missing on plain-http origins (e.g. a LAN IP), so fall back to a hidden textarea. */
+async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    /* fall through to the legacy path */
+  }
+  const el = document.createElement("textarea");
+  el.value = text;
+  el.style.position = "fixed";
+  el.style.opacity = "0";
+  document.body.appendChild(el);
+  el.select();
+  try {
+    return document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    el.remove();
+  }
+}
+
+export async function copyShare(roomId: string) {
+  const url = shareUrl(roomId);
+  if (await copyText(url)) toast.success("Link copied — send it to your fellow gardeners");
+  else toast.error(`Couldn't copy automatically — the link is ${url}`, { duration: 15000 });
 }
 
 export function CreateRoomDialog({ children }: { children: ReactNode }) {
