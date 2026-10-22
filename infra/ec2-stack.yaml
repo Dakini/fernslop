@@ -67,6 +67,58 @@ Resources:
               - Effect: Allow
                 Action: [logs:CreateLogStream, logs:PutLogEvents]
                 Resource: !GetAtt LogGroup.Arn
+        - PolicyName: write-db-backups
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Write-only: no get, list or delete, so a compromised instance can neither read nor wipe old dumps.
+              # PutObject also covers the multipart upload a streamed `aws s3 cp -` makes.
+              - Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub "${BackupBucket.Arn}/db/*"
+              - Effect: Allow
+                Action: cloudwatch:PutMetricData
+                Resource: "*"
+                Condition: { StringEquals: { "cloudwatch:namespace": Fernslop } }
+
+  # Nightly pg_dump of the compose db (see infra/README.md). Retained when the stack is deleted.
+  BackupBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules: [{ ObjectOwnership: BucketOwnerEnforced }]
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-db-dumps
+            Status: Enabled
+            Prefix: db/
+            ExpirationInDays: 30
+            # A streamed upload that dies half way leaves parts the instance may not abort itself
+            AbortIncompleteMultipartUpload: { DaysAfterInitiation: 1 }
+
+  BackupBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref BackupBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: DenyInsecureTransport
+            Effect: Deny
+            Principal: "*"
+            Action: "s3:*"
+            Resource: [!GetAtt BackupBucket.Arn, !Sub "${BackupBucket.Arn}/*"]
+            Condition: { Bool: { "aws:SecureTransport": "false" } }
 
   InstanceProfile:
     Type: AWS::IAM::InstanceProfile
@@ -213,6 +265,50 @@ Resources:
             fi
           } > .env
 
+          echo "=== db backups ==="
+          # Nightly custom-format pg_dump streamed straight to S3 (never written to this disk), then a
+          # BackupSucceeded metric; the BackupMissingAlarm fires when none arrives for 26 hours.
+          cat > /usr/local/bin/fernslop-backup <<'BACKUP'
+          #!/bin/bash
+          # No -x and no output of the dump: it holds follower emails and photos.
+          set -euo pipefail
+          cd /opt/app
+          key="db/fernslop-$(date -u +%Y%m%dT%H%M%SZ).dump"
+          docker compose exec -T db pg_dump -U fernslop -d fernslop -Fc \
+            | aws s3 cp - "s3://${BackupBucket}/$key" --region ${AWS::Region} --only-show-errors
+          aws cloudwatch put-metric-data --region ${AWS::Region} \
+            --namespace Fernslop --metric-name BackupSucceeded --value 1 --unit Count
+          echo "backup uploaded: s3://${BackupBucket}/$key"
+          BACKUP
+          chmod 700 /usr/local/bin/fernslop-backup
+
+          cat > /etc/systemd/system/fernslop-backup.service <<'UNIT'
+          [Unit]
+          Description=Fernslop Postgres dump to S3
+          Requires=docker.service
+          After=docker.service
+
+          [Service]
+          Type=oneshot
+          Environment=HOME=/root
+          ExecStart=/usr/local/bin/fernslop-backup
+          UNIT
+
+          cat > /etc/systemd/system/fernslop-backup.timer <<'UNIT'
+          [Unit]
+          Description=Nightly Fernslop Postgres dump to S3
+
+          [Timer]
+          OnCalendar=*-*-* 03:00:00 UTC
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
+          UNIT
+
+          systemctl daemon-reload
+          systemctl enable --now fernslop-backup.timer
+
           echo "=== start ==="
           aws ecr get-login-password --region ${AWS::Region} | \
             docker login --username AWS --password-stdin ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com
@@ -245,6 +341,22 @@ Resources:
       ComparisonOperator: GreaterThanThreshold
       AlarmActions: [!Sub "arn:aws:automate:${AWS::Region}:ec2:recover"]
 
+  # ALARM when no nightly backup has succeeded for 26 hours: 26 hourly periods, each with no
+  # BackupSucceeded data point (missing data counts as breaching)
+  BackupMissingAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: No Fernslop database backup reached S3 in the last 26 hours (see infra/README.md)
+      Namespace: Fernslop
+      MetricName: BackupSucceeded
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 26
+      DatapointsToAlarm: 26
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+
   Dashboard:
     Type: AWS::CloudWatch::Dashboard
     Properties:
@@ -266,6 +378,11 @@ Resources:
             "metrics": [
               ["AWS/EC2", "StatusCheckFailed_Instance", "InstanceId", "${Instance}"],
               ["AWS/EC2", "StatusCheckFailed_System", "InstanceId", "${Instance}"]]}},
+          {"type": "alarm", "x": 12, "y": 6, "width": 6, "height": 6, "properties": {
+            "title": "Nightly database backup", "alarms": ["${BackupMissingAlarm.Arn}"]}},
+          {"type": "metric", "x": 18, "y": 6, "width": 6, "height": 6, "properties": {
+            "title": "Backups uploaded (per day)", "region": "${AWS::Region}", "stat": "Sum", "period": 86400,
+            "metrics": [["Fernslop", "BackupSucceeded"]]}},
           {"type": "log", "x": 0, "y": 12, "width": 24, "height": 8, "properties": {
             "title": "Logs (app, db, caddy)", "region": "${AWS::Region}", "view": "table",
             "query": "SOURCE '${LogGroup}' | fields @timestamp, @logStream, @message | sort @timestamp desc | limit 100"}}
@@ -282,3 +399,5 @@ Outputs:
     Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${Dashboard}"
   LogGroupName:
     Value: !Ref LogGroup
+  BackupBucketName:
+    Value: !Ref BackupBucket
