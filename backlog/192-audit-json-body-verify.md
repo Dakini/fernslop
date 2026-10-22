@@ -22,3 +22,7 @@ Verify commit `70dd909` (made outside the process; `audit.md` 4 app side, 5 and 
 
 - `openapi.yaml` and tests next to the code (`backend/app/test_rooms.py` or a new `test_body.py`). Change `body.py` only if a criterion fails.
 - At most 2 new tests; follow `_docs/testing-guidelines.md` (FastAPI section).
+
+## Comments
+
+**Engineer:** Verified `70dd909`; `body.py` needed no change. Checked every criterion against the running app with a throwaway TestClient script: all nine JSON-body routes give 413 `Request body is too large` for an over-cap body sent with `Content-Length` and chunked, 415 `Send the request body as application/json` for `text/plain` and no Content-Type, accept `Application/JSON` (past the type check), and write nothing in any of those cases. Bodiless routes don't use `JsonBody`, so they're unchanged; a 4.9 MB multipart photo still gives 201. The only `async def` in `backend/app/routers` is `subscribe`, which calls `store.get_room` through `run_in_threadpool`. The frontend's `body()` sends `Content-Type: application/json`, and `errorFrom` in `frontend/src/services/http/httpService.ts` turns `message` into the thrown error the toast shows. Added shared `components/responses` `JsonBodyTooLarge` (413) and `NotJson` (415) to `openapi.yaml`, referenced them from all nine operations, and added a note under Errors (`openapi-spec-validator`: OK). Added 2 tests in `backend/app/test_rooms.py`: a chunked over-cap body gives 413, and `application/json; charset=utf-8` gives 201. `uv run pytest`: 136 passed, 2 skipped. `uvx ruff check .`: clean.
