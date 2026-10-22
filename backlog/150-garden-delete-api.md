@@ -27,3 +27,18 @@
 ## Comments
 
 **Engineer:** Added `DELETE /api/rooms/{roomId}` (`deleteRoom`, 204, no actor headers) in `backend/app/routers/rooms.py`. New `StoreProtocol.delete_room(room_id) -> bool` in `store.py`, implemented in `sql_store.py`: one transaction that deletes the room row (False if it did not exist), then its plants and areas (including soft-deleted), feed events (including undone) and follows, then any photo whose url only this room's events used (a photo another room's event also uses, or one no event uses, stays; the `plants` reference table is untouched). The seeded flag lives in `meta`, so a deleted seeded room is not re-seeded on restart. The router calls the new `live.close_room(room_id)` only after the transaction commits; it drops the room's subscribers from the count at once and gives each stream one last `change` and then ends it (`live.py`; `event_stream` returns after a closed `change`). `follows.py` now re-checks the room inside its transaction; posts, plant add and area add already did. `openapi.yaml` has the `deleteRoom` entry (204, 404 with `Error`, no `security`) and the "Soft deletes" section says rooms are hard-deleted. 5 new tests in `backend/app/test_room_delete.py` (all data plus restart, photo rules, the 404 cases and calls afterwards, failure midway changes nothing and does not close streams, live streams end with subscriber count 0). Not tested directly: the concurrent post/follow race (it relies on the in-transaction room checks and the store lock) and the frontend client (`frontend/src/services`), which is for #160. Results: `uv run pytest` on SQLite 127 passed, 2 skipped (Postgres-only); with `FERNSLOP_TEST_DATABASE_URL` against `postgres:17-alpine` in docker, 129 passed. Issue left open.
+
+**QA:**
+
+## QA: PASS
+
+- [x] Delete of an existing (created or seeded) room with no headers returns 204 and an empty body; `getRoomState` then 404, `listRooms` no longer lists it; a seeded room stays gone after a server restart - PASS
+- [x] Plants and areas (including soft-deleted), feed events and follows are physically gone (checked with row counts in the SQLite file); the old unsubscribe link answers `unsubscribed: false`; `build_digests` sends nothing for the room; the `plants` reference table is unchanged - PASS
+- [x] A photo only this room's posts use is 404 afterwards; a photo another room's post also uses stays (200); an unposted upload stays (200) - PASS
+- [x] Second delete, unknown id and non-UUID id all give 404 `Room not found` (no 422); post, plant, area, follow and `/live` calls on the deleted room all give 404 - PASS
+- [x] One transaction: the rollback test (failure after the row deletes) leaves the room and its data unchanged and streams open; 15 runs of a delete racing 11 concurrent posts, plant adds and follows left no orphan rows and only 2xx/404 answers - PASS
+- [x] Two open `/rooms/{id}/live` streams each got a `change` message and then ended; `live.subscriber_count(room_id)` is 0 afterwards (suite test), and no `close_room` call happens when the delete fails - PASS
+- [x] `openapi.yaml` has the `deleteRoom` entry (204, 404 with `Error`, no `security`) and the "Soft deletes" section says rooms are the exception and hard-deleted - PASS
+
+Tests: `cd backend && uv run pytest`, 127 passed, 2 skipped (Postgres-only), 0 failed.
+Spot-check: uvicorn on a free port with a temp SQLite file (`FERNSLOP_DATABASE_URL`), driven over HTTP, then restarted on the same file: 33 checks, all passed. Postgres was not run by QA.
