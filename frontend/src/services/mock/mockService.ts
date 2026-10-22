@@ -239,6 +239,23 @@ export function createMockService(opts: MockOptions = {}): GardenService & { _db
     storage.save(db);
   }
 
+  // The plant or area an undo writes to; null for an event with no undo (a post).
+  const undoTarget = (p: UndoPayload | null) =>
+    !p ? null
+    : p.kind === "restore_plant" ? `plant:${p.room_plant.id}`
+    : p.kind === "delete_plant" ? `plant:${p.room_plant_id}`
+    : `area:${p.area_id}`;
+
+  // Refuse an undo that would revert a later, not-undone event for the same plant or area.
+  // feed_events is in save order, so every event after this one is later.
+  function checkNoLaterChanges(ev: FeedEvent) {
+    const target = undoTarget(ev.undo_payload);
+    const later = db.feed_events.slice(db.feed_events.indexOf(ev) + 1);
+    if (later.some((e) => e.room_id === ev.room_id && !e.undone_at && undoTarget(e.undo_payload) === target)) {
+      throw new Error(`Undo the later changes to this ${target!.startsWith("plant:") ? "plant" : "area"} first`);
+    }
+  }
+
   function applyUndo(p: UndoPayload) {
     if (p.kind === "restore_plant") {
       const i = db.room_plants.findIndex((x) => x.id === p.room_plant.id);
@@ -448,6 +465,7 @@ export function createMockService(opts: MockOptions = {}): GardenService & { _db
       const ev = db.feed_events.find((e) => e.id === eventId);
       if (!ev?.undo_payload) throw new Error("This can't be undone");
       if (ev.undone_at) throw new Error("Already undone");
+      checkNoLaterChanges(ev);
       applyUndo(ev.undo_payload);
       ev.undone_at = iso();
       void actor;

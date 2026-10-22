@@ -192,6 +192,24 @@ describe("undo", () => {
     expect([after!.plants[0]!.x_pct, after!.plants[0]!.y_pct]).toEqual([50, 50]);
   });
 
+  it("won't undo a move while a later watering of the same plant stands", async () => {
+    const { svc } = setup();
+    const room = await svc.createRoom({ name: "R" });
+    const rp = await svc.addPlant(room.id, "plant-tomato", actor);
+    await svc.movePlant(rp.id, 10, 20, actor);
+    await svc.markCare(rp.id, "water", actor);
+    const feed = (await svc.getRoomState(room.id))!.feed;
+    const moved = feed.find((e) => e.type === "plant_moved")!;
+    const watered = feed.find((e) => e.type === "care_done")!;
+
+    await expect(svc.undoEvent(moved.id, actor)).rejects.toThrow("Undo the later changes to this plant first");
+    await svc.undoEvent(watered.id, actor);
+    await svc.undoEvent(moved.id, actor);
+
+    const plant = (await svc.getRoomState(room.id))!.plants[0]!;
+    expect([plant.x_pct, plant.y_pct, plant.last_watered_at]).toEqual([50, 50, null]);
+  });
+
   it("undoing an area add removes it", async () => {
     const { svc } = setup();
     const room = await svc.createRoom({ name: "R" });
