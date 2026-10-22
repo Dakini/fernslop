@@ -137,6 +137,13 @@ class FeedEvent(ApiModel):
     created_at: Timestamp
 
 
+class Photo(ApiModel):
+    """What uploading a photo returns."""
+
+    id: str
+    url: str
+
+
 class RoomSummary(ApiModel):
     """Just enough of a room to draw its thumbnail on the index page."""
 
