@@ -1,0 +1,4 @@
+# [audit] Follow-up: bounded room feed with "load older", and a per-room post cap
+**What:** `GET /api/rooms/{id}` returns only the newest feed events (e.g. 50) plus a way to fetch older ones (e.g. `GET /api/rooms/{id}/feed?before=…`), the Feed tab gets a "Load older" button, and posts per room per day are capped (e.g. 200, 429 with a friendly message).
+**Why:** Moved out of #202 (`audit.md` 8): a room with hundreds of thousands of posts is unusable for everyone, and its state response grows without bound.
+**Edge cases:** Undo links on older events still work (and #201's "later event" check reads the store, not the page); live refetches keep the older pages loaded; the digest reads the store, not the API; soft-deleted rooms (#196); `openapi.yaml` and the mock must match; per-IP limits are #195.

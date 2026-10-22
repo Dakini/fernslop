@@ -1,4 +1,26 @@
 # [audit] Make garden delete a soft delete with a retention window
-**What:** `DELETE /api/rooms/{id}` marks the room deleted (a `deleted_at` field in the room's JSON `json` column, not a new SQL column, since migrations are parked in `parked/140-db-migrations.md`) instead of cascading; deleted rooms vanish from the index and give 404 everywhere as today; a scheduled purge removes them, with their plants, areas, feed, follows and photos, after the retention window; an operator can restore a room before then. Covers audit 1 (soft delete bullet; the owner bullet is an open question).
-**Why:** `audit.md` 1 (High): anyone can delete every garden, including seed gardens, with no way back. `_docs/lovable-spec.md` already says "Deletes are soft".
-**Edge cases:** Open questions for the user: the retention period; whether delete stays anyone-can-delete (the spec says "Anyone can edit any room. There are no accounts.") or becomes creator-device-only / per-room owner secret, which would change the concept. Keep the idempotent 204 of done #170 and `live.close_room`; follows of a deleted room must not get digests; seeding must not recreate or duplicate a soft-deleted seed garden; restore path (CLI script vs. endpoint) for the PM to decide.
+
+## Goal
+
+A wiped garden can be brought back for 7 days: `DELETE /api/rooms/{id}` marks the room deleted instead of removing it, a purge command removes it for good after 7 days, and an operator can restore it before then with a CLI script (`audit.md` 1, soft-delete bullet; `_docs/lovable-spec.md`: "Deletes are soft"). Decisions (user): delete stays open to anyone, with no owner check (no accounts, per the spec); retention is 7 days; restore is a CLI script, not an endpoint.
+
+## Acceptance criteria
+
+- [ ] `DELETE` sets `deleted_at` on the stored room and removes nothing. It keeps done [#170](done/170-garden-delete-idempotent.md): always 204, idempotent, and only the call that marks the room closes its `/live` streams.
+- [ ] A soft-deleted room is missing from `GET /api/rooms` and answers 404 on every other room call (state, plants, areas, posts, follows, undo, `/live`) exactly like a missing room; `deleted_at` never appears in an API response; the digest skips it.
+- [ ] `uv run python -m app.room_purge [--days 7]` hard-deletes rooms deleted more than 7 days ago with everything `delete_room` removes today (plants, areas, feed, follows, photos only that room used), leaves younger deletions and live rooms alone, prints how many it purged, and is safe to run twice.
+- [ ] `uv run python -m app.room_restore --list` prints deleted rooms (id, name, deleted at); `uv run python -m app.room_restore <room id>` clears `deleted_at` and the room is back with its plants, areas, feed and follows; an unknown, live or purged id exits non-zero with a clear message and changes nothing.
+- [ ] Seed gardens are never re-created or duplicated by deleting, purging or restoring one (seeding stays keyed on `meta.seeded` in `sql_store.py`); a restored seed garden appears once.
+- [ ] `openapi.yaml` (`deleteRoom` and the "Soft deletes" section) describes the soft delete and the 7-day purge. The delete dialog copy stays as is: users cannot undo, only an operator can.
+- [ ] Tests: a deleted room is not listed and gives 404; purge respects the 7 days; restore brings everything back.
+
+## Out of scope
+
+- Running the purge on the deployed stack: [#198](198-audit-photo-storage.md).
+- Photos of a soft-deleted room stay reachable by their URL until the purge: accepted.
+
+## Constraints
+
+- `backend/app/models.py`, `sql_store.py`, `store.py`, `routers/rooms.py` (other routers only if their 404 does not already go through `get_room`), `digest.py`, new `app/room_purge.py` and `app/room_restore.py`, `openapi.yaml`.
+- `deleted_at` is a pydantic field with default `None` in the room's JSON `json` column, not a SQL column (migrations are parked, [#140](parked/140-db-migrations.md)); rows without it load as live. Filter deleted rooms in one place in the store, with separate methods for purge and restore.
+- At most 5 tests.

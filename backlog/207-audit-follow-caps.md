@@ -1,0 +1,4 @@
+# [audit] Follow-up: cap follows and purge stale unconfirmed follows
+**What:** Cap new follows per room and per email address per day (e.g. 20 per room, 3 per address across all rooms), answering 429 with a friendly message, and add a purge, run with the scheduled jobs from #198, that deletes follows left unconfirmed past the 7-day window from #200.
+**Why:** Moved out of #200 (`audit.md` 3, last fix bullet): without caps one address can be sent many confirmation emails once a real sender exists (parked #110), and unconfirmed follows otherwise stay forever.
+**Edge cases:** The cap response must not reveal whether an address already follows (#200 made the 201 uniform); a re-sent confirmation counts towards the address cap; counts come from stored `created_at` or the JSON column, not new SQL columns (parked #140); per-IP limits are #195.

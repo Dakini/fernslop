@@ -1,4 +1,24 @@
 # [audit] Verify control and format character filtering, and state the identity threat model
-**What:** Groom and QA commit `79c90d5` "Reject control and format characters in names, area labels and post text" (already implemented, needs grooming + QA): new `backend/app/text.py` rejects Unicode Cc/Cf/Zl/Zp in actor names, room name/description/region, area labels and post text (ZWJ allowed for emoji; post text allows `\n` and `\t`). Also add a short threat-model note to the product docs saying names are self-asserted and can be impersonated (homoglyphs are not filtered). Covers audit 3 (second bullet, filtering part) and 11.
-**Why:** `audit.md` 3: a room name with CRLF becomes email header injection once a real sender exists; 11: right-to-left overrides and zero-width characters let anyone impersonate "Ada".
-**Edge cases:** Existing rows with such characters (seed data, earlier posts) must still load and render; emoji with skin tones, flags and ZWJ sequences must pass; a post with `\r\n` from Windows clipboards; the error message must say which field is wrong. Client-side matching filter is #194.
+
+## Goal
+
+Verify commit `79c90d5` (made outside the process; `audit.md` 3 filtering part and 11): user-written names, labels and post text reject control and format characters, and the docs say plainly that identity is self-asserted. The code is believed done; the engineer fills the gaps: tests for the allowed cases, `openapi.yaml` messages and the threat-model note.
+
+## Acceptance criteria
+
+- [ ] A Cc, Cf, Zl or Zp character (e.g. CRLF, U+202E, U+200B, U+2028) gives 400 and writes nothing in `X-Actor-Name`, room name, description and region, area label (add and rename) and post text; the message names the field (`Name contains invalid characters`, `An area label contains invalid characters`, `Text contains invalid characters`, `X-Actor-Name contains invalid characters.`, ...).
+- [ ] These are accepted: 👩‍🌾 (ZWJ sequence), 👍🏽 (skin tone), 🇬🇧 (flag), accented and non-Latin letters. Post text keeps `\n` and `\t`, and `\r\n` or a lone `\r` is stored as `\n`.
+- [ ] Rows stored before the filter (insert one with U+202E directly through the store) still load: `GET /api/rooms` and `GET /api/rooms/{id}` give 200, and moving such an area without sending `label` works.
+- [ ] `openapi.yaml` lists the new 400 message on `createRoom`, `addArea`, `updateArea`, `postUpdate` and the actor headers.
+- [ ] The Authentication section of `openapi.yaml` states the threat model in 2–4 sentences: names are self-asserted, anyone can post as "Ada", look-alike letters (Cyrillic "А") are not filtered, only control and format characters are.
+- [ ] New tests: the emoji above are accepted; an area label with U+202E is rejected.
+
+## Out of scope
+
+- The same rules in the frontend: [#194](194-audit-identity-client.md).
+- Escaping user text in the digest email: [#200](200-audit-follow-opt-in.md).
+- Homoglyph filtering: decided against (names are self-asserted by design, audit 11); documented instead.
+
+## Constraints
+
+- Tests next to the code in `backend/app/`, and `openapi.yaml`. Change `text.py` only if a criterion fails. At most 2 new tests.
