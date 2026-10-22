@@ -126,3 +126,43 @@ Tests (new files `backend/app/test_store.py` and `backend/app/test_seed.py`, plu
 Plant table checked with a throwaway script (not committed) that evaluated `plants-seed.ts` in node and compared the JSON to `build_seed(...).plants`: all 51 rows equal, ids included, `null` kept as `None`. Tests: new `app/test_store.py` and `app/test_seed.py`, the three scaffold store tests in `app/test_main.py` rewritten to save a `Room` instead of setting attributes, plus one added test that `/api/openapi.json` lists no paths. `uv run pytest` from `backend/`: 222 passed, none skipped or xfailed (same single `httpx2` deprecation warning as before).
 
 Notes: (1) `delete_follow` returns a bool (whether a row was removed), which the criteria left open. (2) Seeded area events are `area_changed` "added the area ..." for every area, including Balcony's soft-deleted `Old planter`; there is no separate event for that deletion since the criteria ask for exactly the listed events. (3) A test scans `app/` for `store._`/`s._` usage outside `store.py`, `seed.py` and `test_store.py` to back the "no one touches internals" criterion.
+
+## QA: PASS
+
+- [x] Record models in `models.py` (`Plant`, `Room`, `RoomPlant`, `RoomArea`, `UndoPayload` discriminated on `kind`, `FeedEvent`, `RoomFollow`); `Timestamp` fields dump as `2026-10-22T09:30:00.000Z`; `Literal` enums; `RoomFollow` rejects unknown fields - PASS
+- [x] `StoredFollow` / `StoredPhoto` defined; `StoredFollow.to_public()` returns a `RoomFollow` with no token - PASS
+- [x] Request/response-only shapes not defined here - PASS
+- [x] `StoreProtocol` is `@runtime_checkable`, declares exactly the 23 listed methods, `isinstance(Store(), StoreProtocol)` true - PASS
+- [x] `save_*` insert-or-replace keeping position; `get_*` returns `None` for unknown, `""`, `"not-a-uuid"`; `list_*` returns `[]` for unknown room - PASS
+- [x] `get_room_plant`/`get_area` return soft-deleted rows; `list_*` hide them unless `include_deleted=True` (checked on seed data and after soft-deleting a live plant via save) - PASS
+- [x] Ordering: plants in seed order (first `plant-basil`, last `plant-japanese-maple`); rooms/room plants/areas in insertion order; feed events newest first including undone, later-saved first on equal timestamps - PASS
+- [x] Copy semantics: mutating results of `get_*`/`list_*` (including a nested undo payload and photo bytes) does not change the store; mutating after `save_*` does not change the stored record - PASS
+- [x] `transaction()` re-entrant (nested works), a second thread blocks while another holds it (about 0.5s wait observed), `reset()` also takes the lock, no rollback - PASS
+- [x] `get_store()` typed `StoreProtocol`; `Store(seed=False)` is empty and `reset()` returns to empty; dependency override with an empty store on a throwaway route returned 0 rooms/0 plants, without override 3/51 - PASS
+- [x] Nothing outside `store.py`/`seed.py` touches internal containers (grepped the backend for `store._...`; only `test_store.py`, which is the store's own test module) - PASS
+- [x] `reset()` after adding a room, soft-deleting a seeded plant and saving a follow restores the original room ids, live-plant counts (4) and no follows; repeated resets fine; room ids identical across separate `Store()` instances; `conftest.py` unchanged - PASS
+- [x] Three scaffold tests in `test_main.py` rewritten to save a `Room` (not deleted, no `scratch`/`leaky` attributes) - PASS
+- [x] `build_seed(now)` returns plain data, `ValueError` for naive `now`, two calls with same `now` give equal data; `reset()` calls it with `timestamps.now()` - PASS
+- [x] Exactly 51 plants, same order as `plants-seed.ts`; per category herb 10, vegetable 16, flower 13, houseplant 7, shrub 2, tree 3 - PASS
+- [x] Every row matches the TS file field for field. I evaluated the TS `ROWS` array and `slug` rule in node and compared all 51 rows (id, names, category, description incl. `×` and em dash, four intervals with `null` -> `None`, none are 0); `image_url` `None`, `source`, `source_url` constant on every row - PASS
+- [x] Ids unique, follow slug rule, spot checks (`plant-tomato`, `plant-chilli-pepper`, `plant-fiddle-leaf-fig`, `plant-japanese-maple`, `plant-runner-bean`) present - PASS
+- [x] Plant rows built once at import and reused; `seed.py`/`store.py` do no file I/O - PASS
+- [x] Room A: name/description/region exact; areas `Veg bed` rect (8,12,40,45) soil and `Pond` ellipse (62,55,26,30) water live; live Tomato (18,25), Courgette (36,40), Basil (22,46), Sunflower (70,22); soft-deleted Lettuce (30,35) with `deleted_at` - PASS
+- [x] Room B: name/description/region exact; Monstera (30,50), Chilli Pepper (60,40), Geranium (75,65); live `Sunny corner` rect sage, soft-deleted `Old planter` clay - PASS
+- [x] Room C: `Orchard Corner`, `description` and `region` are `""`; Apple Tree, Blueberry, Japanese Maple at distinct positions; one live area - PASS
+- [x] Bounds: all percentages 0-100, every area fits its canvas, at most 4 live plants / 2 live areas per room, name/description/region lengths within limits - PASS
+- [x] Three distinct `last_activity_at` values, each equal to its newest event's `created_at`; no timestamp later than `now`; each room's `created_at` not later than its plants, areas or events - PASS
+- [x] Live seeded plants have `added_by_name` set, `nickname` `None`, `deleted_at` `None`; only Tomato has `last_watered_at`, all other `last_*_at` `None` - PASS
+- [x] Every room plant (live and deleted) has one `plant_added` event `added a <Common Name>` with `delete_plant` payload; every area has an `area_changed` event with `restore_area` payload, `area` null - PASS
+- [x] Room A `care_done` `watered the Tomato` at the Tomato's `last_watered_at` with snapshot `last_watered_at` `None`; undone `plant_moved` with snapshot position equal to the Tomato's current position; `plant_removed` for Lettuce, not undone, snapshot `deleted_at` `None`; `post` with text, `undo_payload` `None`, `photo_url` `/api/photos/<seeded photo id>` - PASS
+- [x] Room B `post` with text, `photo_url` `None`, `undo_payload` `None` - PASS
+- [x] All six event types present, an undone event and a soft-deleted plant exist, `actor_name` non-empty and at most 40 chars, fixed `device_id` per person (Ada, Ben, Cleo) - PASS
+- [x] Referential integrity: room ids, `room_plant_id`s (and they belong to the event's room), undo-payload ids, `plant_id`s, `photo_url`s all resolve; ids unique - PASS
+- [x] One photo: UUID id, `image/png`, url `/api/photos/<id>`, `data` starts with the PNG signature and decodes as a 1x1 image (IHDR width/height 1/1), referenced by Room A's post - PASS
+- [x] Tests in `test_store.py`, `test_seed.py`, and the `test_main.py` rewrite cover the criteria above (every behaviour I probed independently was also exercised by the suite, and no test is skipped or xfailed) - PASS
+- [x] `uv run pytest` exits 0, nothing skipped or xfailed - PASS. Note: the criterion says "all 57 scaffold tests"; the pre-issue suite (commit ca86a50) actually had 104 tests because #003 landed after the criterion was written, and all of them are in the 222 that pass. This is a stale number in the criterion, not a code defect.
+- [x] `GET /api/health` returns `{"status":"ok"}`; `/api/openapi.json` lists no paths; no new routes - PASS
+
+Observations (not failures): `delete_follow` returns a bool (criterion left it open). Re-saving an existing feed event keeps its original position, so the "later-saved first on ties" rule is about first insertion, which the criterion does not distinguish.
+
+Tests: `uv run pytest` (from `backend/`), 222 passed, 0 failed, 0 skipped, 0 xfailed. Independent throwaway scripts (scratchpad, not committed) compared the seed with `frontend/src/services/mock/plants-seed.ts` and exercised store limits, soft-deleted data, copy semantics, threading and reset. No code was changed.
