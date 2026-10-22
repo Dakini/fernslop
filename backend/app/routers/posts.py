@@ -15,6 +15,7 @@ from app.body import JsonBody
 from app.errors import ApiError
 from app.models import FeedEvent
 from app.store import StoreProtocol, get_store
+from app.text import INVALID_CHARACTERS_MESSAGE, has_invalid_characters, normalise_newlines
 
 router = APIRouter(tags=["Feed"])
 
@@ -24,6 +25,7 @@ ROOM_NOT_FOUND_MESSAGE = "Room not found"
 EMPTY_POST_MESSAGE = "Write something or add a photo"
 TEXT_TOO_LONG_MESSAGE = f"Text must be at most {TEXT_MAX_LENGTH} characters"
 BAD_TEXT_MESSAGE = "text must be a string"
+BAD_CHARACTERS_MESSAGE = INVALID_CHARACTERS_MESSAGE.format(label="Text")
 BAD_PHOTO_MESSAGE = "That photo didn't upload — try again"
 
 
@@ -40,9 +42,11 @@ def post_update(
     text = body.get("text", "")
     if not isinstance(text, str):
         raise ApiError(400, BAD_TEXT_MESSAGE)
-    text = text.strip()
+    text = normalise_newlines(text).strip()
     if len(text) > TEXT_MAX_LENGTH:
         raise ApiError(400, TEXT_TOO_LONG_MESSAGE)
+    if has_invalid_characters(text, multiline=True):
+        raise ApiError(400, BAD_CHARACTERS_MESSAGE)
 
     # A missing photo_id counts as empty. Extra fields (such as photo_url) are ignored.
     photo_id = body.get("photo_id")

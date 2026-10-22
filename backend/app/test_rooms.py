@@ -100,6 +100,15 @@ def test_get_room_state_for_unknown_id_gives_404_not_422(rooms_client, room_id):
 
 
 
+def test_create_room_with_a_line_break_in_the_name_gives_400_and_creates_nothing(rooms_client, store):
+    # A CRLF in the name would end up in the digest email's Subject header (audit finding 3).
+    response = rooms_client.post("/api/rooms", json={"name": "Subject\r\nBcc: everyone@example.com"})
+
+    assert response.status_code == 400
+    assert response.json() == {"message": "Name contains invalid characters"}
+    assert len(store.list_rooms()) == 3
+
+
 # --- Request bodies (audit findings 4 and 9) ---------------------------------
 
 

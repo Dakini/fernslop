@@ -10,6 +10,7 @@ from app.body import JsonBody
 from app.errors import ApiError
 from app.models import Room, RoomState, RoomSummary, RoomSummaryPlant
 from app.store import StoreProtocol, get_store
+from app.text import INVALID_CHARACTERS_MESSAGE, has_invalid_characters
 
 router = APIRouter(tags=["Rooms"])
 
@@ -34,6 +35,8 @@ def _optional_text(body: dict[str, Any], field: str, label: str, max_length: int
 def _checked(value: str, label: str, max_length: int) -> str:
     if len(value) > max_length:
         raise ApiError(400, f"{label} must be at most {max_length} characters")
+    if has_invalid_characters(value):
+        raise ApiError(400, INVALID_CHARACTERS_MESSAGE.format(label=label))
     return value
 
 

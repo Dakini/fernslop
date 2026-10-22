@@ -88,6 +88,13 @@ def test_name_of_41_characters_is_rejected(actor_client):
     assert_rejected(response, "X-Actor-Name must be at most 40 characters.")
 
 
+@pytest.mark.parametrize("value", ["A%0D%0Ada", "A%E2%80%AEda"])  # CRLF; a right-to-left override (Cf)
+def test_name_with_control_or_format_characters_is_rejected(actor_client, value):
+    response = post_actor(actor_client, **{"X-Actor-Name": value})
+
+    assert_rejected(response, "X-Actor-Name contains invalid characters.")
+
+
 # --- Precedence and shape ----------------------------------------------------
 
 

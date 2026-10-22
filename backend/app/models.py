@@ -5,6 +5,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PlainSerializer, field_validator
 
+from app.text import INVALID_CHARACTERS_MESSAGE, has_invalid_characters
 from app.timestamps import format_timestamp
 
 
@@ -116,6 +117,8 @@ def _check_area_label(value: str) -> str:
         raise ValueError(AREA_LABEL_REQUIRED_MESSAGE)
     if len(label) > AREA_LABEL_MAX_LENGTH:
         raise ValueError(AREA_LABEL_TOO_LONG_MESSAGE)
+    if has_invalid_characters(label):
+        raise ValueError(INVALID_CHARACTERS_MESSAGE.format(label="An area label"))
     return label
 
 

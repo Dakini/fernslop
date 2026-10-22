@@ -5,7 +5,6 @@ self-asserted and only attribute edits to an actor; they never authorise or
 deny anything, and nothing here looks anything up in the store.
 """
 
-import unicodedata
 from typing import Annotated
 from urllib.parse import unquote
 
@@ -13,6 +12,7 @@ from fastapi import Header
 
 from app.errors import ApiError
 from app.models import ApiModel
+from app.text import has_invalid_characters
 
 DEVICE_ID_MAX_LENGTH = 64
 ACTOR_NAME_MAX_LENGTH = 40
@@ -44,7 +44,7 @@ def _actor_name(raw: str | None) -> str:
         raise ApiError(400, "X-Actor-Name is not valid percent-encoded UTF-8.") from None
     if not name:
         raise ApiError(400, "X-Actor-Name header is required.")
-    if any(unicodedata.category(char) == "Cc" for char in name):
+    if has_invalid_characters(name):
         raise ApiError(400, "X-Actor-Name contains invalid characters.")
     if len(name) > ACTOR_NAME_MAX_LENGTH:
         raise ApiError(400, f"X-Actor-Name must be at most {ACTOR_NAME_MAX_LENGTH} characters.")

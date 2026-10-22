@@ -110,6 +110,8 @@ def test_post_with_photo_copies_the_photos_url(api, store):
         ({"text": "a" * 1001, "photo_id": None}, LONG_MESSAGE),
         ({"text": 5, "photo_id": None}, "text must be a string"),
         ({"text": "Hi", "photo_id": MISSING_ID}, PHOTO_MESSAGE),
+        # A right-to-left override can disguise what the line says (audit finding 3).
+        ({"text": "Hi \u202egnp.exe", "photo_id": None}, "Text contains invalid characters"),
     ],
 )
 def test_invalid_post_is_400_with_message_and_writes_nothing(api, store, notify, body, message):
