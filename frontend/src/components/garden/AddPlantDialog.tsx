@@ -84,7 +84,7 @@ export function AddPlantDialog({ open, onOpenChange, onPick }: { open: boolean; 
               <span className="font-display font-bold text-moss">{busy ? "Looking closely…" : "Upload a photo"}</span>
               <span className="text-xs text-muted-foreground">JPG, PNG or WebP up to 5 MB</span>
             </Label>
-            <input id="plant-photo" type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" onChange={(e) => onFile(e.target.files?.[0])} />
+            <input id="plant-photo" type="file" accept="image/jpeg,image/png,image/webp" className="sr-only" onChange={(e) => { void onFile(e.target.files?.[0]); e.target.value = ""; }} />
             {candidates && (
               <>
                 <p className="text-sm font-bold text-moss">Which one is it?</p>

@@ -42,7 +42,6 @@ export const Route = createFileRoute("/r/$roomId")({
       { name: "twitter:card", content: "summary_large_image" },
     ],
   }),
-  pendingComponent: () => <p className="p-10 text-center font-display text-moss">Walking down the garden path…</p>,
   notFoundComponent: () => (
     <div className="p-10 text-center">
       <h1 className="text-2xl">This garden can't be found</h1>

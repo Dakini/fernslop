@@ -22,7 +22,6 @@ export const Route = createFileRoute("/")({
     ],
   }),
   loader: ({ context }) => context.queryClient.ensureQueryData(roomsQuery()),
-  pendingComponent: () => <p className="p-10 text-center font-display text-moss">Opening the garden gate…</p>,
   component: Index,
 });
 
