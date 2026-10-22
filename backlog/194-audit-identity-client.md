@@ -21,3 +21,11 @@ The frontend never sends a broken identity and catches a nickname the backend wo
 
 - `frontend/src/lib/identity.ts`, its test, the nickname form in `frontend/src/routes/r.$roomId.tsx`. Inline message per `_docs/design-system.md`. No new dependency.
 - After #193 (the backend rules it mirrors). At most 3 tests.
+
+## Comments
+
+**Engineer:** Implemented in `frontend/src/lib/identity.ts`, its test and the nickname form in `frontend/src/routes/r.$roomId.tsx`.
+- `nicknameError` holds the backend rules (trimmed, 1–40 code points, no Cc/Cf/Zl/Zp except U+200D; lone surrogates rejected too since `encodeURIComponent` throws on them). Device id: trimmed, 1–64 code points.
+- `loadIdentity` repairs non-JSON, non-object or bad `name`/`device_id`, keeps the valid half, generates the other and saves it. If localStorage get or set throws, an in-memory identity is used for the session and nickname changes update it.
+- Nickname form: invalid name shows an inline `role="alert"` message under the field (same pattern as the Follow form), no save, no toast; empty keeps the old name as before. Removed `maxLength={40}` (it counted UTF-16 units, blocking 40 × 🌱) and the `slice(0, 40)` that could split a surrogate pair.
+- Tests: 3 new in `identity.test.ts` (repair keeps valid half, bad nickname rejected, emoji accepted). They use a stubbed in-memory localStorage because Node 26's own `localStorage` global shadows jsdom's. `npm test`: 8 files, 44 tests pass.
