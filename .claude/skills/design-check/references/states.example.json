@@ -1,0 +1,7 @@
+[
+  {
+    "name": "create-room-dialog",
+    "route": "/",
+    "steps": [{ "click": "button:has-text('Create a room')" }, { "wait_for": "[role=dialog]" }]
+  }
+]

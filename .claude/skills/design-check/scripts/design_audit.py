@@ -3,7 +3,7 @@
 
 Run it ephemerally so no dependency is added to the repo:
 
-    uv run --with playwright python .claude/skills/design-check/scripts/design_audit.py \
+    uv run --with playwright==1.63.0 python .claude/skills/design-check/scripts/design_audit.py \
         --base-url http://localhost:5173 --crawl --out tmp/design-check/run1
 
 For each route (and optional interaction state) and each viewport it writes a full-page
@@ -36,6 +36,16 @@ VIEWPORTS = {
     "tablet": dict(width=768, height=1024, device_scale_factor=2, is_mobile=True, has_touch=True),
     "desktop": dict(width=1280, height=800, device_scale_factor=1, is_mobile=False, has_touch=False),
     "wide": dict(width=1920, height=1080, device_scale_factor=1, is_mobile=False, has_touch=False),
+}
+# Which computed properties should be uniform across pages, per element category. Size variants
+# (button font-size, padding) and link colours are legitimately varied, so they are left out to keep the report short.
+COMPARED_PROPS = {
+    "h1": ("font-family", "font-size", "font-weight", "color"),
+    "h2": ("font-family", "font-size", "font-weight", "color"),
+    "h3": ("font-family", "font-size", "font-weight", "color"),
+    "button": ("font-family", "border-radius"),
+    "link": ("font-family",),
+    "field": ("font-family", "font-size", "border-radius", "background", "color"),
 }
 DEFAULT_VIEWPORTS = ["mobile-small", "mobile", "tablet", "desktop"]
 
@@ -85,8 +95,10 @@ AUDIT_JS = r"""
   }
 
   // --- Interactive elements -------------------------------------------------
-  const interactiveSel = 'a[href], button, input:not([type=hidden]), select, textarea, [role=button], [role=link], [role=tab], [role=menuitem], [tabindex]:not([tabindex="-1"])';
-  const interactive = all.filter((el) => el.matches(interactiveSel) && !el.disabled);
+  const interactiveSel = 'a[href], button, input:not([type=hidden]), select, textarea, [role=button], [role=link], [role=tab], [role=menuitem]'; // not [tabindex]: tabpanels are focusable but are not controls
+  // With a modal open, everything behind its backdrop is inert, so only the dialog's own controls count.
+  const modal = all.find((el) => el.matches('[role=dialog], [role=alertdialog], dialog[open]'));
+  const interactive = all.filter((el) => el.matches(interactiveSel) && !el.disabled && (!modal || modal.contains(el)));
   if (opts.touch) {
     const tiny = [], small = [];
     for (const el of interactive) {
@@ -100,7 +112,8 @@ AUDIT_JS = r"""
     if (tiny.length) add('fail', 'tap-target-tiny', `${tiny.length} tap target(s) under 24px (WCAG 2.5.8 minimum).`, tiny);
     if (small.length) add('warn', 'tap-target-small', `${small.length} tap target(s) under 44px (recommended touch size).`, small);
   }
-  const overlaps = [];
+  const floating = (el) => { for (let p = el; p && p !== document.body; p = p.parentElement) if (['fixed', 'sticky'].includes(getComputedStyle(p).position)) return true; return false; };
+  const overlaps = [], floatingOverlaps = [];
   const cand = interactive.slice(0, 300);
   for (let i = 0; i < cand.length; i++) for (let j = i + 1; j < cand.length; j++) {
     const a = cand[i], b = cand[j];
@@ -109,9 +122,10 @@ AUDIT_JS = r"""
     const w = Math.min(ra.right, rb.right) - Math.max(ra.left, rb.left);
     const h = Math.min(ra.bottom, rb.bottom) - Math.max(ra.top, rb.top);
     if (w > 0 && h > 0 && (w * h) / Math.min(ra.width * ra.height, rb.width * rb.height) > 0.3)
-      overlaps.push(`${describe(a)} overlaps ${describe(b)}`);
+      (floating(a) || floating(b) ? floatingOverlaps : overlaps).push(`${describe(a)} overlaps ${describe(b)}`);
   }
   if (overlaps.length) add('fail', 'interactive-overlap', `${overlaps.length} pair(s) of controls overlap, so one is hard to tap.`, overlaps);
+  if (floatingOverlaps.length) add('warn', 'floating-control-covers', `${floatingOverlaps.length} fixed/sticky control(s) (e.g. a floating action button) sit over another control; check it cannot hide a tap target.`, floatingOverlaps);
 
   if (opts.mobile) {
     const zoom = interactive.filter((el) => el.matches('input:not([type=checkbox]):not([type=radio]):not([type=range]),select,textarea') && parseFloat(getComputedStyle(el).fontSize) < 16)
@@ -140,7 +154,8 @@ AUDIT_JS = r"""
     const bars = all.filter((el) => ['fixed', 'sticky'].includes(getComputedStyle(el).position)).filter((el) => {
       const r = el.getBoundingClientRect();
       const overlay = r.width >= vw - 1 && r.height >= vh - 1; // dialog backdrop, intentional
-      return !overlay && r.height > vh * 0.3 && r.width > vw * 0.8;
+      const isModal = modal && (el === modal || el.contains(modal) || modal.contains(el)); // a dialog is meant to cover the screen
+      return !overlay && !isModal && r.height > vh * 0.3 && r.width > vw * 0.8;
     }).map(describe);
     if (bars.length) add('warn', 'fixed-covers-screen', 'Fixed/sticky element covers over 30% of the screen height.', bars);
   }
@@ -184,7 +199,7 @@ AUDIT_JS = r"""
           'font-size': cs.fontSize, 'font-weight': cs.fontWeight,
           'color': fg[3] === 255 ? `rgb(${fg.slice(0, 3)})` : 'translucent',
           'background': bg[3] === 0 ? 'none' : bg[3] === 255 ? `rgb(${bg.slice(0, 3)})` : 'translucent',
-          'border-radius': cs.borderTopLeftRadius,
+          'border-radius': parseFloat(cs.borderTopLeftRadius) > 1000 ? 'pill' : cs.borderTopLeftRadius,
           'padding': `${cs.paddingTop} ${cs.paddingRight} ${cs.paddingBottom} ${cs.paddingLeft}`,
         },
       });
@@ -272,20 +287,32 @@ def audit_page(ctx, base_url, target, vp_name, vp, args, shots):
     return {"target": target["name"], "route": target["route"], "viewport": vp_name, "screenshot": str(shot), **data}
 
 
-def crawl(ctx, base_url, route, limit):
+def crawl(ctx, base_url, route, limit, args):
+    """Same-origin links on ``route`` as (path, label). Done once per browser context because dynamic ids
+    (e.g. the mock backend's random room ids) are only valid in the context that saw them."""
     page = ctx.new_page()
     page.goto(urljoin(base_url, route), wait_until="load")
-    page.wait_for_timeout(1000)
-    hrefs = page.eval_on_selector_all("a[href]", "els => els.map(e => e.getAttribute('href'))")
+    if args.wait_for:
+        page.locator(args.wait_for).first.wait_for(state="visible", timeout=10000)
+    # Data-driven links (room cards) appear after the first fetch; retry briefly before concluding there are none.
+    links = []
+    for _ in range(5):
+        page.wait_for_timeout(max(args.settle_ms, 500))
+        links = page.eval_on_selector_all(
+            "a[href]", "els => els.map(e => [e.getAttribute('href'), (e.innerText || e.getAttribute('aria-label') || '').trim().split('\\n')[0]])"
+        )
+        if any(h.startswith("/") and h != route for h, _ in links):
+            break
     page.close()
     found = []
-    for href in hrefs:
+    seen = {route}
+    for href, label in links:
         parsed = urlparse(urljoin(base_url, href))
         path = parsed.path + (f"?{parsed.query}" if parsed.query else "")
-        if parsed.netloc != urlparse(base_url).netloc or parsed.path.startswith("/api") or href.startswith("#"):
+        if parsed.netloc != urlparse(base_url).netloc or parsed.path.startswith("/api") or href.startswith("#") or path in seen:
             continue
-        if path != route and path not in found:
-            found.append(path)
+        seen.add(path)
+        found.append((path, label[:30] or path))
     return found[:limit]
 
 
@@ -307,6 +334,8 @@ def cross_page(results):
         for r in runs:
             for s in r["styles"]:
                 for prop, value in s["props"].items():
+                    if prop not in COMPARED_PROPS[s["cat"]]:
+                        continue
                     seen[s["cat"]][prop][value] += 1
                     example.setdefault((s["cat"], prop, value), f"{r['target']}: {s['el']}")
         for cat, props in seen.items():
@@ -409,22 +438,22 @@ def main() -> int:
         try:
             browser = pw.chromium.launch()
         except PlaywrightError as error:
-            sys.exit(f"{error}\n\nIf the browser is missing, install it once with:\n  uv run --with playwright playwright install chromium")
-        targets = []
+            sys.exit(f"{error}\n\nIf the browser is missing, install it once with:\n  uv run --with playwright==1.63.0 playwright install chromium")
+        static = [{"name": "home" if r == "/" else r, "route": r} for r in routes]
+        if args.states:
+            for state in json.loads(Path(args.states).read_text()):
+                static.append({"name": state["name"], "route": state.get("route", "/"), "steps": state.get("steps", [])})
         for vp_name in viewports:
             vp = VIEWPORTS[vp_name]
             ctx = browser.new_context(
                 viewport={"width": vp["width"], "height": vp["height"]}, device_scale_factor=vp["device_scale_factor"],
                 is_mobile=vp["is_mobile"], has_touch=vp["has_touch"], reduced_motion="reduce",
             )
-            if not targets:  # resolved once, with the first viewport's context
-                targets = [{"name": "home" if r == "/" else r, "route": r} for r in routes]
-                if args.crawl:
-                    extra = crawl(ctx, args.base_url, routes[0], args.max_crawl)
-                    targets += [{"name": p, "route": p} for p in extra if p not in routes]
-                if args.states:
-                    for state in json.loads(Path(args.states).read_text()):
-                        targets.append({"name": state["name"], "route": state.get("route", "/"), "steps": state.get("steps", [])})
+            targets = list(static)
+            if args.crawl:
+                # Named by link text, so the same page lines up across viewports even when its url differs.
+                targets += [{"name": label, "route": path} for path, label in crawl(ctx, args.base_url, routes[0], args.max_crawl, args)]
+            if vp_name == viewports[0]:
                 print(f"Auditing {len(targets)} page(s) x {len(viewports)} viewport(s): " + ", ".join(t["name"] for t in targets))
             for target in targets:
                 try:
