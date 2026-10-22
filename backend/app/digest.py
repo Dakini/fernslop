@@ -106,7 +106,7 @@ def send_digests(digests: list[Digest], sender: EmailSender) -> SendReport:
     for digest in digests:
         try:
             sender.send(digest.to, digest.subject, digest.body)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - one bad send must not stop the rest
             failed += 1
             # Only the exception type: the body, and so the token, must stay out of logs.
             logger.error("Digest to %s failed: %s", digest.to, type(exc).__name__)

@@ -6,7 +6,14 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.sql_store import SqlStore
 from app.store import DATABASE_URL_ENV, DEFAULT_DATABASE_URL, close_stores, get_store
-from app.test_store import T0, make_event, make_follow, make_photo, make_room, make_room_plant
+from app.test_store import (
+    T0,
+    make_event,
+    make_follow,
+    make_photo,
+    make_room,
+    make_room_plant,
+)
 
 # Behaviour shared by every store lives in test_store.py; these cover what the SQL store adds.
 
@@ -93,7 +100,7 @@ def test_twenty_threads_each_reading_the_count_and_saving_in_a_transaction_end_w
             with s.transaction():
                 count = len(s.list_rooms())
                 s.save_room(make_room(f"room-{number}", name=str(count)))
-        except Exception as error:  # e.g. "database is locked"
+        except Exception as error:  # noqa: BLE001 - e.g. "database is locked"
             errors.append(error)
 
     threads = [threading.Thread(target=add_one, args=(n,)) for n in range(20)]
@@ -118,7 +125,7 @@ def test_two_stores_starting_at_the_same_moment_on_an_empty_postgres_seed_it_onc
         try:
             barrier.wait()
             stores.append(SqlStore(TEST_DATABASE_URL))
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - report any failure from the thread
             errors.append(error)
 
     threads = [threading.Thread(target=start) for _ in range(2)]
@@ -146,7 +153,7 @@ def test_ten_threads_on_each_of_two_postgres_stores_reading_the_count_and_saving
             with s.transaction():
                 count = len(s.list_rooms())
                 s.save_room(make_room(f"room-{number}", name=str(count)))
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - report any failure from the thread
             errors.append(error)
 
     threads = [threading.Thread(target=add_one, args=(n,)) for n in range(20)]

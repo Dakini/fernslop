@@ -13,7 +13,6 @@ from typing import Annotated, Protocol
 
 import httpx
 from fastapi import Depends
-
 from pydantic import ValidationError
 
 from app.models import IdentifyCandidate, Plant

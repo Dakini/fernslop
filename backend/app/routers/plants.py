@@ -5,7 +5,12 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, UploadFile
 
 from app.errors import ApiError
-from app.identify import IDENTIFY_FAILED_MESSAGE, IdentifyError, IdentifyProvider, get_identify_provider
+from app.identify import (
+    IDENTIFY_FAILED_MESSAGE,
+    IdentifyError,
+    IdentifyProvider,
+    get_identify_provider,
+)
 from app.models import IdentifyCandidate, Plant
 from app.store import StoreProtocol, get_store
 from app.uploads import read_image_upload

@@ -1,6 +1,5 @@
 import pytest
 
-
 HEALTH = "/api/health"
 LOCAL_ORIGINS = [
     "http://localhost:5173",

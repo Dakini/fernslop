@@ -12,53 +12,53 @@ T0 = datetime(2026, 10, 22, 9, 30, 0, tzinfo=UTC)
 
 
 def make_room(id="room-1", **overrides) -> Room:
-    fields = dict(id=id, name="Test room", description="", region="", created_at=T0, last_activity_at=T0)
+    fields = {"id": id, "name": "Test room", "description": "", "region": "", "created_at": T0, "last_activity_at": T0}
     return Room(**{**fields, **overrides})
 
 
 def make_room_plant(id="rp-1", room_id="room-1", **overrides) -> RoomPlant:
-    fields = dict(
-        id=id,
-        room_id=room_id,
-        plant_id="plant-tomato",
-        nickname=None,
-        x_pct=10,
-        y_pct=20,
-        last_watered_at=None,
-        last_fed_at=None,
-        last_pruned_at=None,
-        last_harvested_at=None,
-        added_by_name="Tester",
-        created_at=T0,
-        deleted_at=None,
-    )
+    fields = {
+        "id": id,
+        "room_id": room_id,
+        "plant_id": "plant-tomato",
+        "nickname": None,
+        "x_pct": 10,
+        "y_pct": 20,
+        "last_watered_at": None,
+        "last_fed_at": None,
+        "last_pruned_at": None,
+        "last_harvested_at": None,
+        "added_by_name": "Tester",
+        "created_at": T0,
+        "deleted_at": None,
+    }
     return RoomPlant(**{**fields, **overrides})
 
 
 def make_event(id="ev-1", room_id="room-1", **overrides) -> FeedEvent:
-    fields = dict(
-        id=id,
-        room_id=room_id,
-        type="post",
-        actor_name="Tester",
-        device_id="device-1",
-        room_plant_id=None,
-        text="hello",
-        photo_url=None,
-        undo_payload=None,
-        undone_at=None,
-        created_at=T0,
-    )
+    fields = {
+        "id": id,
+        "room_id": room_id,
+        "type": "post",
+        "actor_name": "Tester",
+        "device_id": "device-1",
+        "room_plant_id": None,
+        "text": "hello",
+        "photo_url": None,
+        "undo_payload": None,
+        "undone_at": None,
+        "created_at": T0,
+    }
     return FeedEvent(**{**fields, **overrides})
 
 
 def make_follow(id="f-1", room_id="room-1", **overrides) -> StoredFollow:
-    fields = dict(id=id, room_id=room_id, email="a@example.com", created_at=T0, unsubscribe_token="tok-1")
+    fields = {"id": id, "room_id": room_id, "email": "a@example.com", "created_at": T0, "unsubscribe_token": "tok-1"}
     return StoredFollow(**{**fields, **overrides})
 
 
 def make_photo(id="photo-1", **overrides) -> StoredPhoto:
-    fields = dict(id=id, url=f"/api/photos/{id}", content_type="image/png", created_at=T0, data=b"abc")
+    fields = {"id": id, "url": f"/api/photos/{id}", "content_type": "image/png", "created_at": T0, "data": b"abc"}
     return StoredPhoto(**{**fields, **overrides})
 
 
@@ -124,14 +124,13 @@ def test_transaction_rolls_back_every_save_and_delete_when_the_block_raises(new_
     s.save_room(make_room("kept"))
     s.save_follow(make_follow())
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError), s.transaction():
+        s.save_room(make_room("kept", name="Changed"))
+        s.save_room(make_room("added"))
+        s.delete_follow("f-1")
         with s.transaction():
-            s.save_room(make_room("kept", name="Changed"))
-            s.save_room(make_room("added"))
-            s.delete_follow("f-1")
-            with s.transaction():
-                s.save_photo(make_photo())
-            raise RuntimeError("boom")
+            s.save_photo(make_photo())
+        raise RuntimeError("boom")
 
     assert [(r.id, r.name) for r in s.list_rooms()] == [("kept", "Test room")]
     assert s.get_follow_by_token("tok-1") is not None

@@ -17,7 +17,15 @@ import threading
 from contextlib import AbstractContextManager
 from typing import Protocol, runtime_checkable
 
-from app.models import FeedEvent, Plant, Room, RoomArea, RoomPlant, StoredFollow, StoredPhoto
+from app.models import (
+    FeedEvent,
+    Plant,
+    Room,
+    RoomArea,
+    RoomPlant,
+    StoredFollow,
+    StoredPhoto,
+)
 from app.sql_store import SqlStore
 
 

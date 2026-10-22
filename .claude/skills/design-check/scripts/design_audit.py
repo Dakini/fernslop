@@ -30,12 +30,12 @@ from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import sync_playwright
 
 VIEWPORTS = {
-    "mobile-small": dict(width=320, height=640, device_scale_factor=2, is_mobile=True, has_touch=True),
-    "mobile": dict(width=390, height=844, device_scale_factor=3, is_mobile=True, has_touch=True),
-    "mobile-landscape": dict(width=844, height=390, device_scale_factor=3, is_mobile=True, has_touch=True),
-    "tablet": dict(width=768, height=1024, device_scale_factor=2, is_mobile=True, has_touch=True),
-    "desktop": dict(width=1280, height=800, device_scale_factor=1, is_mobile=False, has_touch=False),
-    "wide": dict(width=1920, height=1080, device_scale_factor=1, is_mobile=False, has_touch=False),
+    "mobile-small": {"width": 320, "height": 640, "device_scale_factor": 2, "is_mobile": True, "has_touch": True},
+    "mobile": {"width": 390, "height": 844, "device_scale_factor": 3, "is_mobile": True, "has_touch": True},
+    "mobile-landscape": {"width": 844, "height": 390, "device_scale_factor": 3, "is_mobile": True, "has_touch": True},
+    "tablet": {"width": 768, "height": 1024, "device_scale_factor": 2, "is_mobile": True, "has_touch": True},
+    "desktop": {"width": 1280, "height": 800, "device_scale_factor": 1, "is_mobile": False, "has_touch": False},
+    "wide": {"width": 1920, "height": 1080, "device_scale_factor": 1, "is_mobile": False, "has_touch": False},
 }
 # Which computed properties should be uniform across pages, per element category. Size variants
 # (button font-size, padding) and link colours are legitimately varied, so they are left out to keep the report short.

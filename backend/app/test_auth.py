@@ -15,7 +15,7 @@ def make_app() -> FastAPI:
     register_error_handlers(app)
 
     @app.post(ACTOR_PATH)
-    def echo_actor(actor: Actor = Depends(get_actor)):
+    def echo_actor(actor: Actor = Depends(get_actor)):  # noqa: B008 - FastAPI idiom
         return actor
 
     @app.post(OPEN_PATH)

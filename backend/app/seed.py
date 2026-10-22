@@ -198,8 +198,7 @@ class _Builder:
             created_at=at,
         )
         self.data.feed_events.append(event)
-        if at > room.last_activity_at:
-            room.last_activity_at = at
+        room.last_activity_at = max(room.last_activity_at, at)
         return event
 
     def plant(

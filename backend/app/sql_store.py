@@ -46,7 +46,15 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.pool import StaticPool
 
 from app import timestamps
-from app.models import FeedEvent, Plant, Room, RoomArea, RoomPlant, StoredFollow, StoredPhoto
+from app.models import (
+    FeedEvent,
+    Plant,
+    Room,
+    RoomArea,
+    RoomPlant,
+    StoredFollow,
+    StoredPhoto,
+)
 from app.seed import build_seed
 
 M = TypeVar("M", bound=BaseModel)
