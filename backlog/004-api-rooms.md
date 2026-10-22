@@ -16,8 +16,7 @@
 
 ## Out of scope
 
-- Mutations that bump `last_activity_at`: [#006](006-api-room-plants.md), [#007](007-api-areas.md). Room creation sends no `change` message, so no `notify(room_id)` hook is added here; [#011](011-api-live-sse.md) defines it for those issues.
-- Wiring the frontend to these endpoints: [#014](014-api-frontend-wiring.md). Renaming/deleting rooms is not in `openapi.yaml`.
+- Mutations that bump `last_activity_at`: [#006](006-api-room-plants.md), [#007](007-api-areas.md). Room creation sends no `change` message, so no `notify(room_id)` hook is added here; [#011](011-api-live-sse.md) defines it for those issues. Frontend wiring: [#014](014-api-frontend-wiring.md).
 
 ## Constraints
 
@@ -25,8 +24,7 @@
 
 ## Original request
 
-**What:** `GET /rooms`, `POST /rooms` and `GET /rooms/{roomId}`, as defined in `openapi.yaml`.
-**Why:** These power the index page and the room page.
+**What:** `GET /rooms`, `POST /rooms` and `GET /rooms/{roomId}`, as defined in `openapi.yaml`. **Why:** These power the index page and the room page.
 **Edge cases:** Trim all fields. A name that is empty or only whitespace returns 400 `A room needs a name`. Enforce max lengths of 60/200/60. Two rooms with the same name are allowed. `last_activity_at` starts at `created_at`. The list is sorted by `last_activity_at`, newest first, and its summaries contain only live plants and areas. The state includes the full feed, newest first, including undone events. An unknown or non-UUID `roomId` returns 404 with an `Error` body, not FastAPI's 422.
 
 ## Comments
