@@ -1,4 +1,6 @@
 import asyncio
+import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from fastapi.testclient import TestClient
@@ -104,14 +106,19 @@ def test_delete_room_removes_photos_only_that_room_used_and_keeps_shared_and_unp
     assert api.get(unposted.url).status_code == 200
 
 
-def test_delete_room_unknown_twice_or_non_uuid_gives_404_and_later_calls_on_it_give_404(api, store):
+def test_delete_room_is_idempotent_and_later_calls_on_the_room_give_404(api, store, monkeypatch):
+    closed = []
+    monkeypatch.setattr(live, "close_room", closed.append)
     room_id = store.list_rooms()[0].id
-    assert api.delete(f"/api/rooms/{room_id}").status_code == 204
+    other_rooms = [r for r in store.list_rooms() if r.id != room_id]
 
-    for bad_id in (room_id, UNKNOWN_ID, "not-a-uuid"):
-        response = api.delete(f"/api/rooms/{bad_id}")
-        assert (response.status_code, response.json()) == (404, NOT_FOUND)
+    for delete_id in (room_id, room_id, UNKNOWN_ID, "not-a-uuid"):  # first, second, unknown, non-UUID
+        response = api.delete(f"/api/rooms/{delete_id}")
+        assert (response.status_code, response.content) == (204, b"")
+        assert store.list_rooms() == other_rooms  # the repeats changed nothing
+    assert closed == [room_id]  # only the delete that removed data closes the streams
     calls = [
+        api.get(f"/api/rooms/{room_id}"),
         api.post(f"/api/rooms/{room_id}/posts", json={"text": "hi"}, headers=HEADERS),
         api.post(f"/api/rooms/{room_id}/plants", json={"plant_id": store.list_plants()[0].id}, headers=HEADERS),
         api.post(f"/api/rooms/{room_id}/areas", json=make_area(room_id).model_dump(mode="json"), headers=HEADERS),
@@ -119,6 +126,27 @@ def test_delete_room_unknown_twice_or_non_uuid_gives_404_and_later_calls_on_it_g
         api.get(f"/api/rooms/{room_id}/live"),
     ]
     assert [(r.status_code, r.json()) for r in calls] == [(404, NOT_FOUND)] * len(calls)
+
+
+def test_delete_room_by_two_people_at_once_gives_both_204_leaves_nothing_and_closes_streams_once(api, store, monkeypatch):
+    closed = []
+    monkeypatch.setattr(live, "close_room", closed.append)
+    room_id = store.list_rooms()[0].id
+    barrier = threading.Barrier(2)
+
+    def delete_together():
+        barrier.wait()
+        return api.delete(f"/api/rooms/{room_id}").status_code
+
+    with ThreadPoolExecutor(2) as pool:
+        statuses = [f.result() for f in [pool.submit(delete_together) for _ in range(2)]]
+
+    assert statuses == [204, 204]
+    assert closed == [room_id]
+    assert store.get_room(room_id) is None
+    assert store.list_room_plants(room_id, include_deleted=True) == []
+    assert store.list_feed_events(room_id) == []
+    assert store.list_follows(room_id) == []
 
 
 def test_delete_room_that_fails_midway_changes_nothing_and_does_not_close_streams(store, monkeypatch):

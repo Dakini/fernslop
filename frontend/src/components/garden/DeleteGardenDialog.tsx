@@ -62,7 +62,12 @@ export function DeleteGardenDialog({
           <Trash2 /> Delete garden
         </Button>
       </AlertDialogTrigger>
-      <AlertDialogContent className="w-[calc(100%-2rem)] rounded-3xl bg-cream">
+      <AlertDialogContent
+        className="w-[calc(100%-2rem)] rounded-3xl bg-cream"
+        // Radix ignores outside clicks in an alert dialog; here they dismiss it like Cancel
+        // (blocked while the request is in flight, like Cancel and Esc).
+        overlayProps={{ onClick: () => !pending && setOpen(false) }}
+      >
         <AlertDialogHeader>
           <AlertDialogTitle className="font-display text-2xl font-extrabold text-moss">
             Delete “{roomName}”?

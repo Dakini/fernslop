@@ -96,7 +96,7 @@ export function createHttpService(
     },
     async deleteRoom(roomId) {
       const res = await send(`/rooms/${encodeURIComponent(roomId)}`, { method: "DELETE" });
-      if (res.status === 404) return false;
+      if (res.status === 404) return false; // older servers: already gone
       if (!res.ok) throw await errorFrom(res);
       return true;
     },

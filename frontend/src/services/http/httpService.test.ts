@@ -108,7 +108,7 @@ describe("http GardenService", () => {
     expect(close).toHaveBeenCalled();
   });
 
-  it("deleteRoom sends DELETE without actor headers: true on 204, false on 404, rejects otherwise", async () => {
+  it("deleteRoom sends DELETE without actor headers: true on 204 (also when already gone), false on an old server's 404, rejects otherwise", async () => {
     const svc = createHttpService();
     fetchMock.mockResolvedValueOnce(reply(204));
     await expect(svc.deleteRoom("room 1")).resolves.toBe(true);

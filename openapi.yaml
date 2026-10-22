@@ -140,16 +140,16 @@ paths:
         then answers "already unsubscribed". A photo only this room's posts use is deleted
         too. Open `/rooms/{roomId}/live` streams get a final `change` message and end.
         Anyone with the link can call it: no actor headers.
+
+        Idempotent: it answers 204 whether the room was just deleted, was already gone (a
+        second call, or two people confirming at the same moment) or never existed (also an
+        id that is not a UUID). Only the call that removes the room changes anything.
+        Every other call on a deleted room still answers 404.
       parameters:
         - $ref: "#/components/parameters/RoomId"
       responses:
         "204":
-          description: Deleted
-        "404":
-          description: No room with this id (also for a second delete or an id that is not a UUID).
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/Error" }
+          description: The room is gone (deleted now, or already gone).
 
   /plants:
     get:

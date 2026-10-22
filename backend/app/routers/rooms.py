@@ -104,9 +104,14 @@ def get_room_state(room_id: str, store: Annotated[StoreProtocol, Depends(get_sto
 
 @router.delete("/rooms/{room_id}", operation_id="deleteRoom", status_code=204)
 def delete_room(room_id: str, store: Annotated[StoreProtocol, Depends(get_store)]) -> Response:
-    """Hard-delete the room and everything in it. Needs no actor headers."""
+    """Hard-delete the room and everything in it. Needs no actor headers.
+
+    Idempotent: a room that is already gone (or never existed, or has a non-UUID id) answers 204
+    too, with nothing changed. Of several deletes at once exactly one removes data (the store
+    transaction is exclusive) and only that one closes the live streams.
+    """
     with store.transaction():
-        if not store.delete_room(room_id):
-            raise ApiError(404, ROOM_NOT_FOUND_MESSAGE)
-    live.close_room(room_id)  # only now that the delete has committed
+        deleted = store.delete_room(room_id)
+    if deleted:
+        live.close_room(room_id)  # only now that the delete has committed
     return Response(status_code=204)

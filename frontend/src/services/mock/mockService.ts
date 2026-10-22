@@ -301,7 +301,7 @@ export function createMockService(opts: MockOptions = {}): GardenService & { _db
     },
 
     async deleteRoom(roomId) {
-      if (!db.rooms.some((r) => r.id === roomId)) return wait(false);
+      if (!db.rooms.some((r) => r.id === roomId)) return wait(true); // already gone: idempotent
       db.rooms = db.rooms.filter((r) => r.id !== roomId);
       db.room_plants = db.room_plants.filter((p) => p.room_id !== roomId);
       db.room_areas = db.room_areas.filter((a) => a.room_id !== roomId);

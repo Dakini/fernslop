@@ -47,7 +47,7 @@ describe("rooms", () => {
 });
 
 describe("deleting a room", () => {
-  it("removes the room with its data, notifies subscribers and reports false the second time", async () => {
+  it("removes the room with its data, notifies subscribers and is idempotent", async () => {
     const { svc } = setup();
     const room = await svc.createRoom({ name: "Doomed" });
     const other = await svc.createRoom({ name: "Kept" });
@@ -66,7 +66,9 @@ describe("deleting a room", () => {
     expect(db.room_follows).toHaveLength(0);
     expect((await svc.listRooms()).map((r) => r.room.id)).toEqual([other.id]);
 
-    await expect(svc.deleteRoom(room.id)).resolves.toBe(false);
+    await expect(svc.deleteRoom(room.id)).resolves.toBe(true); // second delete: no error, no change
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect((await svc.listRooms()).map((r) => r.room.id)).toEqual([other.id]);
   });
 });
 

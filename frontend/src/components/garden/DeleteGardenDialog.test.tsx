@@ -41,7 +41,7 @@ describe("DeleteGardenDialog", () => {
     expect(deleteRoom).toHaveBeenCalledWith("r1");
     expect(onDeleted).not.toHaveBeenCalled();
 
-    finish(false); // already gone elsewhere: still a success
+    finish(true); // 204, also when someone else deleted it first
     await waitFor(() => expect(onDeleted).toHaveBeenCalledTimes(1));
   });
 
@@ -64,6 +64,32 @@ describe("DeleteGardenDialog", () => {
     expect(confirm).toBeEnabled();
 
     fireEvent.click(confirm);
+    await waitFor(() => expect(onDeleted).toHaveBeenCalledTimes(1));
+  });
+
+  it("closes without deleting when the overlay is clicked, but not while the request is pending", async () => {
+    let finish!: (v: boolean) => void;
+    const deleteRoom = vi.fn(() => new Promise<boolean>((r) => (finish = r)));
+    const { onDeleted } = setup(deleteRoom);
+    const overlay = () =>
+      document.body.querySelector<HTMLElement>(".bg-black\\/80")!;
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete garden" }));
+    await screen.findByRole("alertdialog");
+    fireEvent.click(overlay());
+    await waitFor(() =>
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument(),
+    );
+    expect(deleteRoom).not.toHaveBeenCalled();
+    expect(onDeleted).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete garden" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Delete garden" }),
+    );
+    fireEvent.click(overlay()); // request in flight: stays open
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument();
+    finish(true);
     await waitFor(() => expect(onDeleted).toHaveBeenCalledTimes(1));
   });
 });

@@ -131,7 +131,11 @@ export interface GardenService {
   listRooms(): Promise<RoomSummary[]>;
   createRoom(input: { name: string; description?: string; region?: string }): Promise<Room>;
   getRoomState(roomId: string): Promise<RoomState | null>;
-  /** Permanently deletes a garden and everything in it. True when deleted, false when it was already gone. */
+  /**
+   * Permanently deletes a garden and everything in it. Idempotent: deleting a garden that is
+   * already gone also succeeds and resolves true (the server answers 204 either way). False only
+   * when an older server answers 404; callers treat both as "the garden is gone". Other errors reject.
+   */
   deleteRoom(roomId: string): Promise<boolean>;
 
   listPlants(): Promise<Plant[]>;
