@@ -1,23 +1,35 @@
-"""Follow a room by email, and unsubscribe with the token from a digest email.
+"""Follow a room by email (double opt-in), confirm it, and unsubscribe with the token from an email.
 
-Neither endpoint touches the room's ``last_activity_at``, writes a feed event or
+A follow starts unconfirmed and gets a confirmation email; only a confirmed follow gets digests.
+The follow answer is always 201 with just what the caller sent, so it never reveals whether the
+address already followed. The one token per follow is in both the confirmation and the
+unsubscribe link, in the URL fragment, and reaches the server only in a JSON body.
+
+None of these endpoints touches the room's ``last_activity_at``, writes a feed event or
 notifies the live stream: following is not room activity.
 """
 
+import logging
 import re
 import secrets
 import uuid
+from datetime import timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends
 
 from app import timestamps
 from app.body import JsonBody
+from app.digest import EmailSender, confirmation_email, get_email_sender
 from app.errors import ApiError
 from app.models import RoomFollow, StoredFollow
 from app.store import StoreProtocol, get_store
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(tags=["Follows"])
+
+CONFIRM_WINDOW = timedelta(days=7)
 
 EMAIL_MAX_LENGTH = 254
 BAD_EMAIL_MESSAGE = "That email doesn't look right"
@@ -41,8 +53,8 @@ def _clean_email(value: object) -> str:
 def follow_room(
     room_id: str,
     raw: JsonBody,
-    response: Response,
     store: Annotated[StoreProtocol, Depends(get_store)],
+    sender: Annotated[EmailSender, Depends(get_email_sender)],
 ) -> RoomFollow:
     # The room is checked before the body, so an unknown room is always a 404.
     if store.get_room(room_id) is None:
@@ -51,21 +63,58 @@ def follow_room(
     email = _clean_email(body.get("email"))
 
     with store.transaction():
-        if store.get_room(room_id) is None:  # deleted since the check above
+        room = store.get_room(room_id)
+        if room is None:  # deleted since the check above
             raise ApiError(404, ROOM_NOT_FOUND_MESSAGE)
-        existing = store.get_follow_by_email(room_id, email)
-        if existing is not None:
-            response.status_code = 200
-            return existing.to_public()
-        follow = StoredFollow(
-            id=str(uuid.uuid4()),
-            room_id=room_id,
-            email=email,
-            created_at=timestamps.now(),
-            unsubscribe_token=secrets.token_urlsafe(32),
-        )
-        store.save_follow(follow)
-    return follow.to_public()
+        follow = store.get_follow_by_email(room_id, email)
+        if follow is None:
+            follow = StoredFollow(
+                id=str(uuid.uuid4()),
+                room_id=room_id,
+                email=email,
+                created_at=timestamps.now(),
+                unsubscribe_token=secrets.token_urlsafe(32),
+            )
+            store.save_follow(follow)
+        elif follow.confirmed_at is None:
+            # A repeat restarts the 7 days to confirm, so the re-sent link works.
+            follow = follow.model_copy(update={"created_at": timestamps.now()})
+            store.save_follow(follow)
+        else:
+            follow = None  # already confirmed: nothing to send
+
+    if follow is not None:
+        _send_confirmation(sender, follow, room.name)
+    return RoomFollow(room_id=room_id, email=email)
+
+
+def _send_confirmation(sender: EmailSender, follow: StoredFollow, room_name: str) -> None:
+    """Send after the commit; a failed send is logged (without the token) and the follow stays."""
+    subject, body = confirmation_email(room_name, follow.unsubscribe_token)
+    try:
+        sender.send(follow.email, subject, body)
+    except Exception as exc:  # noqa: BLE001 - the follow is stored; the owner can follow again
+        logger.error("Follow confirmation to %s failed: %s", follow.email, type(exc).__name__)
+
+
+@router.post("/follows/confirm", operation_id="confirmFollow")
+def confirm_follow(raw: JsonBody, store: Annotated[StoreProtocol, Depends(get_store)]) -> dict[str, bool]:
+    body = raw.object()
+    token = body.get("token")
+    if not isinstance(token, str):
+        raise ApiError(400, TOKEN_REQUIRED_MESSAGE)
+
+    with store.transaction():
+        follow = store.get_follow_by_token(token) if token else None
+        if follow is None:
+            return {"confirmed": False}
+        if follow.confirmed_at is not None:
+            return {"confirmed": True}
+        now = timestamps.now()
+        if now - follow.created_at > CONFIRM_WINDOW:
+            return {"confirmed": False}
+        store.save_follow(follow.model_copy(update={"confirmed_at": now}))
+    return {"confirmed": True}
 
 
 @router.post("/follows/unsubscribe", operation_id="unfollow")
