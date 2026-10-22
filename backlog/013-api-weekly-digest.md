@@ -23,7 +23,6 @@ A command a scheduler can run weekly (`uv run python -m app.digest`) emails each
 - Code in `backend/app/digest.py` (with `__main__` support), tests in `backend/app/test_digest.py`. Use only `StoreProtocol` methods and `app.timestamps`. No new dependencies and no scheduler library. Follow `_docs/testing-guidelines.md`. Spec: the follow and unsubscribe notes in `openapi.yaml`.
 
 ## Original request
-
 **What:** A scheduled job that emails each follower a summary of rooms that had activity that week, including the unsubscribe token link.
 **Why:** This was moved out of 010. The spec says it is a scheduled job, not an endpoint, and it needs an email provider.
 **Edge cases:** Rooms with no activity that week get no email. The digest must not include undone events.
