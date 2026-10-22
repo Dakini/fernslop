@@ -143,3 +143,26 @@ file(s) for at least:
 
 When in doubt, match the density and style already in `core/test_auth.py`
 and `projects/test_projects.py` rather than inventing a new pattern.
+
+
+## FastAPI backend adaptation (`backend/`)
+
+The sections above describe the Django setup. The FastAPI backend in
+`backend/` follows the same style with these changes:
+
+- Run from `backend/`: `uv run pytest`, or `uv run pytest app/test_main.py`.
+  Config is in `backend/pyproject.toml` under `[tool.pytest.ini_options]`, not
+  `pytest.ini`. There is no `pytest-django`, no database and no `django_db`
+  marker.
+- Use a `client` fixture built on `fastapi.testclient.TestClient` (needs
+  `httpx`). Do not call route functions directly. There is no `reverse()`, so
+  assert literal paths including the `/api` prefix.
+- The in-memory store is a module-level singleton. `backend/conftest.py`
+  defines an autouse, function-scoped `reset_store` fixture that resets the
+  store before and after every test, plus the `client` fixture. This is the one
+  shared `conftest.py`; test-data factories still live in each test module.
+- Errors are `{"message": ...}` bodies, not forms. Assert the status code and
+  `response.json()["message"]` where the Django rules say to check
+  `form.errors`. Validation failures are 400 (422 only for `markCare`).
+- Naming, Arrange/Act/Assert, section banners and "test observable
+  behaviour" apply unchanged. Tests live next to the code in `backend/app/`.
