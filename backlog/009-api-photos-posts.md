@@ -30,3 +30,17 @@
 ## Comments
 
 - Engineer: implemented all criteria. `routers/photos.py` (`uploadPhoto`, `getPhoto`; reuses `read_image_upload`, saves via `store.save_photo`, 404 `Photo not found` for unknown/non-UUID ids), `routers/posts.py` (`postUpdate`; event, room activity bump in one `store.transaction()`, then `live.notify(room_id)`), `Photo` model, router registration, tests in `test_photos.py` and `test_posts.py`. Whole suite passes (552). Interpretations: a missing `text` counts as empty but an explicit `"text": null` is a non-string (400); a body that fails validation is reported before an unknown room (404), as in 006. These files were swept into the "QA 010: PASS" commit (6ac503b) by a concurrent commit.
+
+## QA: PASS
+
+- [x] POST /photos with JPEG, PNG, WebP returns 201 `{id, url}`, UUID4 id, `url == /api/photos/{id}`; exactly 5 MiB accepted, 5 MiB + 1 gives 413, gif/text type gives 415, PNG bytes declared as JPEG and garbage declared as PNG give 415, missing `file` gives 400; rejected uploads store nothing; no actor headers needed - PASS
+- [x] GET /photos/{id} returns the exact bytes, sniffed content type and `Cache-Control: public, max-age=31536000, immutable`; seeded photo works; unknown, non-UUID and uppercase-unknown ids give 404 `Photo not found` - PASS
+- [x] POST /rooms/{id}/posts with `{"text": "  Hi  ", "photo_id": null}` returns 201 `post` event, text `Hi`, `photo_url`/`room_plant_id`/`undo_payload` null, actor name (percent-decoded) and device id, UUID4 id, first in `GET /rooms/{id}` feed; missing `text`/`photo_id` accepted; extra fields ignored - PASS
+- [x] With a `photo_id`, `photo_url` equals the stored photo's url (client-sent `photo_url` ignored); photo-only post has `text` ""; same photo posted several times; seeded photo postable - PASS
+- [x] 400 with no event written, no activity bump and no notify for: empty/whitespace text and no photo, int/list/null `text`, 1001 chars (1000 and 1000 after trimming accepted), unknown/non-UUID/empty/int/list/bool `photo_id` (also with text present), invalid JSON, bad UTF-8, empty body, non-object bodies; never 422; unknown or non-UUID room gives 404 `Room not found` - PASS
+- [x] Actor headers required (missing, blank, over-long device id/name all 400, nothing written); success sets room `last_activity_at` to the event `created_at` and calls `live.notify(room_id)` exactly once per success (6 successes, 6 calls), zero on failures - PASS
+- [x] Tests per criterion in `test_photos.py` and `test_posts.py` using a fresh `Store` via `dependency_overrides[get_store]`, including `test_post_reads_back_the_bytes_of_the_photo_it_just_uploaded` - PASS
+
+Tests: `uv run pytest`, 683 passed, 0 failed. Also ran an independent throwaway script against the endpoints for all of the above.
+
+Note: with no actor headers and an unknown room, the response is the 400 header error (not 404), since the actor dependency runs first. Consistent with the criteria.
