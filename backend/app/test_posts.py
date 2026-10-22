@@ -1,6 +1,7 @@
 import uuid
 from contextlib import contextmanager
 from unittest.mock import MagicMock
+from urllib.parse import quote
 
 import pytest
 from fastapi.testclient import TestClient
@@ -86,6 +87,17 @@ def test_text_post_returns_201_and_a_post_event_with_trimmed_text(api, store):
     assert body["undone_at"] is None
     assert body["actor_name"] == "Tess"
     assert body["device_id"] == "device-1"
+
+
+# The ZWJ in 👩‍🌾 is a format character (Cf), but the text filter must let it through (#193).
+@pytest.mark.parametrize("value", ["👩‍🌾", "👍🏽", "🇬🇧", "Zoë", "Аня 花子"])
+def test_post_accepts_emoji_and_non_latin_letters_in_name_and_text(api, store, value):
+    headers = {**HEADERS, "X-Actor-Name": quote(value)}
+
+    response = post(api, room_id_of(store), {"text": value, "photo_id": None}, headers=headers)
+
+    assert response.status_code == 201
+    assert (response.json()["actor_name"], response.json()["text"]) == (value, value)
 
 
 # --- Photos --------------------------------------------------------------------

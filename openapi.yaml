@@ -23,6 +23,11 @@ info:
     them. In this spec they are modelled as the `actor` security scheme, so
     "requires actor" means "requires these headers".
 
+    Threat model: names are self-asserted, so anyone can post as "Ada" and nothing
+    proves two edits came from the same person. Look-alike letters (a Cyrillic "А"
+    for a Latin "A") are not filtered. The server only rejects control and format
+    characters (and line and paragraph separators) in names, labels and post text.
+
     Unsubscribing uses the follow's `unsubscribe_token` as a bearer capability.
 
     ## Errors
@@ -109,7 +114,12 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Room" }
         "400":
-          $ref: "#/components/responses/BadRequest"
+          description: |
+            Invalid request body. A control or format character in a field gives
+            `Name contains invalid characters` (or `Description ...`, `Region ...`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
         "413":
           $ref: "#/components/responses/JsonBodyTooLarge"
         "415":
@@ -408,7 +418,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/RoomArea" }
         "400":
-          $ref: "#/components/responses/BadRequest"
+          $ref: "#/components/responses/BadAreaRequest"
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
@@ -446,7 +456,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/RoomArea" }
         "400":
-          $ref: "#/components/responses/BadRequest"
+          $ref: "#/components/responses/BadAreaRequest"
         "404":
           $ref: "#/components/responses/AreaNotFound"
         "413":
@@ -506,7 +516,9 @@ paths:
         "400":
           description: |
             Both text and photo are empty (message `Write something or add a photo`), or
-            `photo_id` doesn't match an uploaded photo (message `That photo didn't upload — try again`).
+            `photo_id` doesn't match an uploaded photo (message `That photo didn't upload — try again`),
+            or `text` holds a control or format character other than newline and tab (message
+            `Text contains invalid characters`). `\r\n` and a lone `\r` are stored as `\n`.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -782,12 +794,22 @@ components:
       description: |
         The actor's display name, for example `Anonymous Hedgehog` (at most 40 characters).
         Stored as `FeedEvent.actor_name` and, for new plants, `RoomPlant.added_by_name`.
-        Send it percent-encoded (UTF-8), since header values are ASCII-only.
+        Send it percent-encoded (UTF-8), since header values are ASCII-only. A control or
+        format character in the decoded name gives 400 with message
+        `X-Actor-Name contains invalid characters.` (the zero-width joiner in emoji such as
+        👩‍🌾 is allowed).
       schema: { type: string, maxLength: 120 }
 
   responses:
     BadRequest:
       description: Invalid request body
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    BadAreaRequest:
+      description: |
+        Invalid request body. A control or format character in `label` gives
+        `An area label contains invalid characters`.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
