@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { toast } from "sonner";
 import { createHttpService } from "./httpService";
 import { getServices, setServices } from "../index";
 
@@ -86,6 +87,26 @@ describe("http GardenService", () => {
 
     fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
     await expect(svc.listRooms()).rejects.toThrow(/Couldn't reach the server/);
+  });
+
+  it("on 429 shows one friendly toast using Retry-After and rejects with the same message", async () => {
+    const svc = createHttpService();
+    const toastError = vi.spyOn(toast, "error");
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ message: "x" }), {
+        status: 429,
+        headers: { "Retry-After": "30" },
+      }),
+    );
+
+    await expect(svc.movePlant("rp1", 1, 2, actor)).rejects.toThrow(
+      "You're going a bit fast. Try again in 30 seconds.",
+    );
+    expect(toastError).toHaveBeenCalledWith(
+      "You're going a bit fast. Try again in 30 seconds.",
+      { id: "rate-limit" },
+    );
+    toastError.mockRestore();
   });
 
   it("subscribe opens an EventSource, fires onChange per change event only, and closes", () => {

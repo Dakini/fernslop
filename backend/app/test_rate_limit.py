@@ -68,20 +68,12 @@ def test_photo_limit_does_not_block_other_writes_or_other_ips(client, limits):
 # --- Who the client is ------------------------------------------------------------
 
 
-def test_client_sent_x_forwarded_for_is_ignored_without_a_trusted_proxy(client, limits):
+def test_limit_keys_on_the_peer_ip_or_ipv6_64_and_ignores_a_client_sent_x_forwarded_for(limits):
+    # No proxy is trusted here (uvicorn's --proxy-headers is not in play), as on a local run.
     limits(create_room="1/hour")
-    create_room(client, headers={"X-Forwarded-For": "198.51.100.1"})
+    create_room(from_ip("2001:db8:1:2::1"), headers={"X-Forwarded-For": "198.51.100.1"})
 
-    response = create_room(client, headers={"X-Forwarded-For": "198.51.100.2"})
-
-    assert response.status_code == 429
-
-
-def test_ipv6_clients_in_the_same_64_share_a_limit(limits):
-    limits(create_room="1/hour")
-    create_room(from_ip("2001:db8:1:2::1"))
-
-    same_64 = create_room(from_ip("2001:db8:1:2:ffff::9"))
+    same_64 = create_room(from_ip("2001:db8:1:2:ffff::9"), headers={"X-Forwarded-For": "198.51.100.2"})
     other_64 = create_room(from_ip("2001:db8:1:3::1"))
 
     assert same_64.status_code == 429

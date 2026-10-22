@@ -1,4 +1,5 @@
 // HTTP implementation of GardenService against the backend described in /openapi.yaml.
+import { toast } from "sonner";
 import type {
   Actor,
   FeedEvent,
@@ -10,6 +11,23 @@ import type {
 const GENERIC_ERROR = "Something went wrong. Please try again.";
 const NETWORK_ERROR =
   "Couldn't reach the server. Check your connection and try again.";
+/** One toast at a time for 429s: a burst of limited calls updates it instead of stacking. */
+const RATE_LIMIT_TOAST_ID = "rate-limit";
+
+/** The 429 message, from the `Retry-After` header (whole seconds). */
+export function tooFastMessage(retryAfter: string | null): string {
+  const seconds = Number(retryAfter);
+  let wait = "a moment";
+  if (retryAfter && Number.isFinite(seconds) && seconds > 0) {
+    const s = Math.ceil(seconds);
+    const m = Math.ceil(s / 60);
+    wait =
+      s < 60
+        ? `${s} second${s === 1 ? "" : "s"}`
+        : `${m} minute${m === 1 ? "" : "s"}`;
+  }
+  return `You're going a bit fast. Try again in ${wait}.`;
+}
 
 export function createHttpService(
   opts: { baseUrl?: string } = {},
@@ -42,6 +60,11 @@ export function createHttpService(
   }
 
   async function errorFrom(res: Response): Promise<Error> {
+    if (res.status === 429) {
+      const message = tooFastMessage(res.headers.get("Retry-After"));
+      toast.error(message, { id: RATE_LIMIT_TOAST_ID });
+      return new Error(message);
+    }
     try {
       const body = await res.json();
       if (body && typeof body.message === "string" && body.message)
