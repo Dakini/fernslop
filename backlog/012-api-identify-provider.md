@@ -34,3 +34,17 @@ Implemented all criteria in `backend/app/identify.py` and `test_identify.py` (no
 - Mapping by trimmed, case-insensitive scientific name; unmatched or malformed items (including a score outside 0..1) are dropped, duplicates keep the highest score.
 - All failures and WebP uploads raise `IdentifyError` `from None`. httpx logs the full request URL at INFO, so a log filter on the `httpx`/`httpcore` loggers redacts `api-key=` values; a test checks `caplog` at DEBUG.
 - `uv run pytest` in `backend/`: 683 passed, nothing skipped or xfailed.
+
+### QA
+
+## QA: PASS
+
+- [x] Config: plantnet + non-blank key selects `PlantNetIdentifyProvider`; unset, `stub`, unknown, `PlantNet`, empty provider, missing/blank/whitespace key all return the stub - PASS
+- [x] Request: one POST to `https://my-api.plantnet.org/v2/identify/all?api-key=<key>`, multipart `images` (bytes, filename, sniffed type) plus `organs=auto`, timeout 10 s on connect/read/write/pool - PASS
+- [x] Mapping: score becomes confidence, trimmed and case-insensitive scientific-name match, unmatched dropped, duplicate keeps highest score, no match or empty results is `200 []` - PASS
+- [x] Failures: ReadTimeout, ConnectTimeout, ConnectError, 301/401/404/429/500, non-JSON, empty body, JSON without `results`, non-object body, non-list `results` all give `IdentifyError` and 502 via `POST /api/plants/identify`; WebP gives 502 with zero upstream calls - PASS
+- [x] Key never leaks: with key `SECRET123`, no occurrence in any response body or header, the `IdentifyError` message or `__cause__` (None, `from None`), the formatted traceback, or any log record at DEBUG (httpx lines show `api-key=***`; httpcore DEBUG lines against a real loopback client carry no URL). Note: `__context__` still holds the httpx error but is suppressed, which is what the criterion asks for - PASS
+- [x] Tests use `httpx.MockTransport`, cover request shape, mapping, each failure and the env selector, and check `caplog` for the key; no network - PASS
+- [x] `uv run pytest` exits 0, nothing skipped or xfailed - PASS
+
+Tests: `uv run pytest` (backend/), 683 passed, 0 failed. Also ran throwaway scripts (MockTransport, TestClient, loopback server for the real-client log check); no code changed.
