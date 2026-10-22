@@ -1,0 +1,4 @@
+# [audit] Validate the stored identity and nickname in the frontend
+**What:** In `frontend/src/lib/identity.ts`, validate the parsed localStorage identity (both `name` and `device_id` present and well formed) and regenerate it on mismatch, and apply the same character rules as `backend/app/text.py` (#193) to nicknames before saving. Covers audit 14 (first and second bullet).
+**Why:** A corrupted or hand-edited identity sends the string `undefined` in the headers, and a pasted nickname with control characters is accepted client-side but rejected by the backend; either way every action fails with a 400 the UI cannot explain.
+**Edge cases:** Regenerating must keep a valid name if only `device_id` is broken (and vice versa) so users keep their nickname; localStorage unavailable (private mode) must still work for the session; show an inline message on the nickname field rather than a failed action later; length limits must match the backend.

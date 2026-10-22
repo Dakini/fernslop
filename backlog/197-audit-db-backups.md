@@ -1,0 +1,4 @@
+# [audit] Nightly Postgres backups off the instance
+**What:** Add a scheduled `pg_dump` of the compose Postgres database to storage off the EC2 instance (e.g. an S3 bucket with a lifecycle rule) in `infra/ec2-stack.yaml`, plus a documented restore procedure. Covers audit 1 (backup bullet) and 13 (no `pgdata` backup bullet).
+**Why:** `audit.md`: there is no recovery path after a mass delete or instance replacement; the CloudFormation template already notes that replacing the instance loses the data.
+**Edge cases:** The dump includes follower emails and photo bytes (encrypt the bucket, least-privilege write-only role for the instance); dump size grows with photos (see #198); a failed backup must be visible (CloudWatch); restore must be tested once, not just written down; cost of retention days.

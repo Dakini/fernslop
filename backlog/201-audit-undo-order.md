@@ -1,0 +1,4 @@
+# [audit] Undo must not revert later changes
+**What:** Undo of a plant or area event must not silently overwrite later changes: either restore only the fields that event changed (store a diff instead of the full snapshot), or refuse with 409 when a later not-undone event exists for the same `room_plant_id` or area id, and the UI explains why. Covers audit 6.
+**Why:** `audit.md` 6 (confirmed): move a plant, water it, undo the move, and `last_watered_at` goes back to null while the care event still shows as not undone; any visitor can quietly erase others' care records this way.
+**Edge cases:** Existing feed events already hold full snapshots, so the chosen approach must handle old payloads; undo of a removal after the plant slot limit (50) was reached; undoing an area rename after a later move; undo of an undo; two people undoing at once; live updates must reflect the result.

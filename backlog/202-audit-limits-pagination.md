@@ -1,0 +1,4 @@
+# [audit] Bound room listing, feed size and plant search
+**What:** `list_rooms` loads with one query per table (no N+1) and is paginated or capped; `get_room_state` returns a bounded recent feed with a way to load older events; cap rooms per device and events (posts) per room; `search_plants` returns at most a fixed number of results. Covers audit 8 (non-rate-limit parts) and 14 (last bullet). Rate limits are #195.
+**Why:** `audit.md` 8: tens of thousands of rooms or hundreds of thousands of posts make the index and a room unusable for everyone and turn the N+1 into a CPU problem.
+**Edge cases:** Open question: the cap numbers. The frontend index and feed need paging UI (or "load more"); undo links on events beyond the first page; soft-deleted rooms (#196) excluded from counts; device caps are bypassable by clearing localStorage, so they only complement #195; `openapi.yaml` and the mock service must match.
