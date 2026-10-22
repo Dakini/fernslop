@@ -6,15 +6,39 @@ import {
   useRouter,
   HeadContent,
   Scripts,
+  ClientOnly,
   type ErrorComponentProps,
 } from "@tanstack/react-router";
-import { useEffect, type ReactNode } from "react";
+import { Suspense, useEffect, type ReactNode } from "react";
 
 import { Toaster } from "@/components/ui/sonner";
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
+import { PagePending } from "../router";
 
+/**
+ * Every path is served the one prerendered shell: `/` showing `PagePending` inside two Suspense
+ * boundaries (the root Outlet's and the index match's). An unknown path skips both on the client,
+ * so on a direct load the 404 first renders that same markup, then swaps in once hydration is done;
+ * rendering the 404 straight away would mismatch (React error #418). Inside the app it shows at once.
+ */
 function NotFoundComponent() {
+  return (
+    <ClientOnly
+      fallback={
+        <Suspense>
+          <Suspense>
+            <PagePending />
+          </Suspense>
+        </Suspense>
+      }
+    >
+      <NotFoundPage />
+    </ClientOnly>
+  );
+}
+
+function NotFoundPage() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
       <div className="max-w-md text-center">
