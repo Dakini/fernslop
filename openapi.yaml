@@ -587,8 +587,13 @@ paths:
         "409":
           description: |
             The event has no undo payload (message `This can't be undone`), has already
-            been undone (message `Already undone`), or would bring back a plant or area into
-            a room that is at its limit (the same messages as `addPlant` and `addArea`).
+            been undone (message `Already undone`, checked first), would revert a later change
+            (message `Undo the later changes to this plant first` or `Undo the later changes
+            to this area first`), or would bring back a plant or area into a room that is at
+            its limit (the same messages as `addPlant` and `addArea`).
+            A later change is a not-undone event after this one in feed order (`created_at`,
+            then save order) for the same plant (`room_plant_id`) or area (`area_id` of
+            `restore_area`); posts, undone events and other plants or areas never block.
             Nothing changes and `undone_at` stays null.
           content:
             application/json:

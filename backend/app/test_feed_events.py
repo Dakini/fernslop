@@ -176,6 +176,58 @@ def test_undo_twice_returns_409_already_undone_and_changes_nothing_the_second_ti
     notify.assert_not_called()
 
 
+# --- Later changes -----------------------------------------------------------
+
+
+def test_undo_of_a_move_after_a_later_watering_returns_409_until_the_watering_is_undone(api, store, notify):
+    plant = tomato_in(store)
+    move(api, plant.id, 70, 80)
+    move_event = newest_event(store, plant.room_id)
+    api.post(f"/api/room-plants/{plant.id}/care", json={"care": "water"}, headers=HEADERS)
+    water_event = newest_event(store, plant.room_id)
+    before = snapshot(store, plant.room_id)
+    notify.reset_mock()
+
+    refused = undo(api, move_event.id)
+    unchanged = snapshot(store, plant.room_id)
+    water_undone = undo(api, water_event.id)
+    move_undone = undo(api, move_event.id)
+
+    assert refused.status_code == 409
+    assert refused.json() == {"message": "Undo the later changes to this plant first"}
+    assert unchanged == before
+    assert water_undone.status_code == 204
+    assert move_undone.status_code == 204
+    assert store.get_room_plant(plant.id) == plant
+
+
+def test_undo_of_an_area_rename_after_a_later_move_of_that_area_returns_409(api, store):
+    area = store.list_areas(room_id_of(store))[0]
+    api.patch(f"/api/areas/{area.id}", json={"label": "Lawn"}, headers=HEADERS)
+    rename_event = newest_event(store, area.room_id)
+    api.patch(f"/api/areas/{area.id}", json={"x_pct": 1}, headers=HEADERS)
+
+    response = undo(api, rename_event.id)
+
+    assert response.status_code == 409
+    assert response.json() == {"message": "Undo the later changes to this area first"}
+    assert store.get_feed_event(rename_event.id).undone_at is None
+
+
+def test_later_events_of_other_plants_and_posts_do_not_block_an_undo(api, store):
+    plant = tomato_in(store)
+    other = next(rp for rp in store.list_room_plants(plant.room_id) if rp.id != plant.id)
+    move(api, plant.id, 70, 80)
+    move_event = newest_event(store, plant.room_id)
+    move(api, other.id, 5, 5)
+    api.post(f"/api/rooms/{plant.room_id}/posts", json={"text": "Looking good"}, headers=HEADERS)
+
+    response = undo(api, move_event.id)
+
+    assert response.status_code == 204
+    assert store.get_room_plant(plant.id) == plant
+
+
 # --- Limits ------------------------------------------------------------------
 
 

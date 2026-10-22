@@ -4,7 +4,9 @@ Undoing applies the event's ``undo_payload`` (written by the room-plant and area
 routers) and sets ``undone_at``. It keeps the payload, writes no new feed event,
 bumps the room's ``last_activity_at`` to ``undone_at``, and calls ``live.notify``
 once after the store transaction has ended. Every check runs before the first
-write, so a 409 changes nothing.
+write, so a 409 changes nothing. An event can only be undone while no later,
+not-undone event touches the same plant or area, so an undo never silently
+reverts a later change.
 """
 
 from typing import Annotated
@@ -29,6 +31,35 @@ router = APIRouter(tags=["Feed"])
 EVENT_NOT_FOUND_MESSAGE = "Event not found"
 CANNOT_UNDO_MESSAGE = "This can't be undone"
 ALREADY_UNDONE_MESSAGE = "Already undone"
+LATER_PLANT_CHANGES_MESSAGE = "Undo the later changes to this plant first"
+LATER_AREA_CHANGES_MESSAGE = "Undo the later changes to this area first"
+
+
+def _target(event: FeedEvent) -> tuple[str, str] | None:
+    """The plant or area an event's undo writes to, or ``None`` for an event with no undo (a post)."""
+    payload = event.undo_payload
+    if isinstance(payload, RestorePlantPayload):
+        return ("plant", payload.room_plant.id)
+    if isinstance(payload, DeletePlantPayload):
+        return ("plant", payload.room_plant_id)
+    if isinstance(payload, RestoreAreaPayload):
+        return ("area", payload.area_id)
+    return None
+
+
+def _check_no_later_changes(store: StoreProtocol, event: FeedEvent) -> None:
+    """Refuse an undo that would silently revert a later, not-undone event for the same plant or area.
+
+    Feed order is newest first (``created_at``, then save order), so every event
+    listed before this one is later.
+    """
+    target = _target(event)
+    for other in store.list_feed_events(event.room_id):
+        if other.id == event.id:
+            return
+        if other.undone_at is None and _target(other) == target:
+            kind = target[0]
+            raise ApiError(409, LATER_PLANT_CHANGES_MESSAGE if kind == "plant" else LATER_AREA_CHANGES_MESSAGE)
 
 
 def _check_room_for_plant(store: StoreProtocol, payload: RestorePlantPayload) -> None:
@@ -84,6 +115,7 @@ def undo_event(
         payload = event.undo_payload
         if payload is None:
             raise ApiError(409, CANNOT_UNDO_MESSAGE)
+        _check_no_later_changes(store, event)
 
         if isinstance(payload, RestorePlantPayload):
             _check_room_for_plant(store, payload)
