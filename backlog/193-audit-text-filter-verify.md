@@ -22,3 +22,7 @@ Verify commit `79c90d5` (made outside the process; `audit.md` 3 filtering part a
 ## Constraints
 
 - Tests next to the code in `backend/app/`, and `openapi.yaml`. Change `text.py` only if a criterion fails. At most 2 new tests.
+
+## Comments
+
+**Engineer:** Verified `79c90d5`; every criterion holds, so `text.py` is unchanged. A throwaway script (not committed) checked CRLF/NUL, U+202E, U+200B and U+2028 against `X-Actor-Name`, room name/description/region, area label (add and rename) and post text: each gives 400 with the field-named message and writes nothing. 👩‍🌾, 👍🏽, 🇬🇧, accented, Cyrillic, CJK and Arabic text are accepted. Post text keeps `\n`/`\t` and stores `\r\n` and lone `\r` as `\n`. A room and area saved with U+202E straight through the store still load via `GET /api/rooms` and `GET /api/rooms/{id}` (200), and moving that area without `label` works. `openapi.yaml`: added a threat-model paragraph to Authentication. Listed the invalid-character 400 messages on `createRoom`, on `addArea`/`updateArea` (new shared `BadAreaRequest` response), on `postUpdate` and on the `X-Actor-Name` parameter. Two new tests: `test_post_accepts_emoji_and_non_latin_letters_in_name_and_text` (test_posts.py, parametrised) and `test_rename_area_to_a_label_with_a_right_to_left_override_returns_400_and_writes_nothing` (test_areas.py). `uv run pytest`: 140 passed, 2 skipped. `uvx ruff check .`: clean.
