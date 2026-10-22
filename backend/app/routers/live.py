@@ -6,6 +6,7 @@ It needs no actor headers, because the browser's ``EventSource`` cannot send the
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
 
 from app import live
@@ -19,7 +20,8 @@ ROOM_NOT_FOUND_MESSAGE = "Room not found"
 
 @router.get("/rooms/{room_id}/live", operation_id="subscribe", response_class=StreamingResponse)
 async def subscribe(room_id: str, store: Annotated[StoreProtocol, Depends(get_store)]) -> StreamingResponse:
-    if store.get_room(room_id) is None:
+    # In the thread pool: a store call can wait on the store lock, which must not block the event loop.
+    if await run_in_threadpool(store.get_room, room_id) is None:
         raise ApiError(404, ROOM_NOT_FOUND_MESSAGE)
     return StreamingResponse(
         live.event_stream(room_id),

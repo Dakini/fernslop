@@ -3,6 +3,7 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
+from app.body import MAX_JSON_BODY_BYTES
 from app.main import app
 from app.sql_store import SqlStore
 from app.store import get_store
@@ -97,3 +98,23 @@ def test_get_room_state_for_unknown_id_gives_404_not_422(rooms_client, room_id):
     assert response.json() == {"message": "Room not found"}
 
 
+
+
+# --- Request bodies (audit findings 4 and 9) ---------------------------------
+
+
+def test_create_room_sent_as_text_plain_gives_415_and_creates_nothing(rooms_client, store):
+    # text/plain is a CORS "simple" request, so another site could send it without a preflight.
+    response = rooms_client.post("/api/rooms", content=b'{"name": "Sneaky"}', headers={"Content-Type": "text/plain"})
+
+    assert response.status_code == 415
+    assert "Sneaky" not in [room.name for room in store.list_rooms()]
+
+
+def test_create_room_with_a_body_over_the_size_cap_gives_413_and_creates_nothing(rooms_client, store):
+    rooms_before = store.list_rooms()
+
+    response = rooms_client.post("/api/rooms", json={"name": "Big", "description": "x" * (MAX_JSON_BODY_BYTES + 1)})
+
+    assert response.status_code == 413
+    assert store.list_rooms() == rooms_before

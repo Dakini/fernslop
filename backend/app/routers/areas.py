@@ -5,15 +5,15 @@ issue 008 applies, bumps the room's ``last_activity_at`` to the event's
 ``created_at``, and calls ``live.notify`` once after the store transaction has ended.
 """
 
-import json
 import uuid
-from typing import Annotated, Any
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Response
 from pydantic import ValidationError
 
 from app import live, timestamps
 from app.auth import Actor, get_actor
+from app.body import JsonBody
 from app.errors import ApiError
 from app.models import AreaInput, AreaPatch, FeedEvent, RestoreAreaPayload, RoomArea
 from app.store import StoreProtocol, get_store
@@ -26,16 +26,6 @@ ROOM_NOT_FOUND_MESSAGE = "Room not found"
 AREA_NOT_FOUND_MESSAGE = "Area not found"
 TOO_MANY_AREAS_MESSAGE = f"This garden has the maximum {MAX_LIVE_AREAS} areas"
 EMPTY_PATCH_MESSAGE = "Send at least one of: label, shape, x_pct, y_pct, w_pct, h_pct, colour"
-
-
-async def _json_object(request: Request) -> dict[str, Any]:
-    try:
-        body = json.loads(await request.body())
-    except ValueError:  # invalid JSON, or bytes that are not UTF-8
-        raise ApiError(400, "Request body is not valid JSON") from None
-    if not isinstance(body, dict):
-        raise ApiError(400, "Request body must be a JSON object")
-    return body
 
 
 def _validation_message(exc: ValidationError) -> str:
@@ -89,13 +79,13 @@ def _update_text(before: RoomArea, after: RoomArea, changed: set[str]) -> str:
 
 
 @router.post("/rooms/{room_id}/areas", operation_id="addArea", status_code=201)
-async def add_area(
+def add_area(
     room_id: str,
-    request: Request,
+    raw: JsonBody,
     store: Annotated[StoreProtocol, Depends(get_store)],
     actor: Annotated[Actor, Depends(get_actor)],
 ) -> RoomArea:
-    body = await _json_object(request)
+    body = raw.object()
     try:
         data = AreaInput.model_validate(body)
     except ValidationError as exc:
@@ -115,13 +105,13 @@ async def add_area(
 
 
 @router.patch("/areas/{area_id}", operation_id="updateArea")
-async def update_area(
+def update_area(
     area_id: str,
-    request: Request,
+    raw: JsonBody,
     store: Annotated[StoreProtocol, Depends(get_store)],
     actor: Annotated[Actor, Depends(get_actor)],
 ) -> RoomArea:
-    body = await _json_object(request)
+    body = raw.object()
     try:
         patch = AreaPatch.model_validate(body)
     except ValidationError as exc:

@@ -4,15 +4,15 @@ Neither endpoint touches the room's ``last_activity_at``, writes a feed event or
 notifies the live stream: following is not room activity.
 """
 
-import json
 import re
 import secrets
 import uuid
-from typing import Annotated, Any
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Response
 
 from app import timestamps
+from app.body import JsonBody
 from app.errors import ApiError
 from app.models import RoomFollow, StoredFollow
 from app.store import StoreProtocol, get_store
@@ -28,16 +28,6 @@ TOKEN_REQUIRED_MESSAGE = "token must be a string"
 _EMAIL_PATTERN = re.compile(r"[^@\s]+@[^@\s.]+(?:\.[^@\s.]+)+")
 
 
-async def _json_object(request: Request) -> dict[str, Any]:
-    try:
-        body = json.loads(await request.body())
-    except ValueError:  # invalid JSON, or bytes that are not UTF-8
-        raise ApiError(400, "Request body is not valid JSON") from None
-    if not isinstance(body, dict):
-        raise ApiError(400, "Request body must be a JSON object")
-    return body
-
-
 def _clean_email(value: object) -> str:
     if not isinstance(value, str):
         raise ApiError(400, BAD_EMAIL_MESSAGE)
@@ -48,16 +38,16 @@ def _clean_email(value: object) -> str:
 
 
 @router.post("/rooms/{room_id}/follows", operation_id="followRoom", status_code=201)
-async def follow_room(
+def follow_room(
     room_id: str,
-    request: Request,
+    raw: JsonBody,
     response: Response,
     store: Annotated[StoreProtocol, Depends(get_store)],
 ) -> RoomFollow:
     # The room is checked before the body, so an unknown room is always a 404.
     if store.get_room(room_id) is None:
         raise ApiError(404, ROOM_NOT_FOUND_MESSAGE)
-    body = await _json_object(request)
+    body = raw.object()
     email = _clean_email(body.get("email"))
 
     with store.transaction():
@@ -79,8 +69,8 @@ async def follow_room(
 
 
 @router.post("/follows/unsubscribe", operation_id="unfollow")
-async def unfollow(request: Request, store: Annotated[StoreProtocol, Depends(get_store)]) -> dict[str, bool]:
-    body = await _json_object(request)
+def unfollow(raw: JsonBody, store: Annotated[StoreProtocol, Depends(get_store)]) -> dict[str, bool]:
+    body = raw.object()
     token = body.get("token")
     if not isinstance(token, str):
         raise ApiError(400, TOKEN_REQUIRED_MESSAGE)

@@ -4,14 +4,14 @@ A success saves the ``post`` event and bumps the room's ``last_activity_at`` in
 one store transaction, then calls ``live.notify`` once after it has ended.
 """
 
-import json
 import uuid
-from typing import Annotated, Any
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends
 
 from app import live, timestamps
 from app.auth import Actor, get_actor
+from app.body import JsonBody
 from app.errors import ApiError
 from app.models import FeedEvent
 from app.store import StoreProtocol, get_store
@@ -27,24 +27,14 @@ BAD_TEXT_MESSAGE = "text must be a string"
 BAD_PHOTO_MESSAGE = "That photo didn't upload — try again"
 
 
-async def _json_object(request: Request) -> dict[str, Any]:
-    try:
-        body = json.loads(await request.body())
-    except ValueError:  # invalid JSON, or bytes that are not UTF-8
-        raise ApiError(400, "Request body is not valid JSON") from None
-    if not isinstance(body, dict):
-        raise ApiError(400, "Request body must be a JSON object")
-    return body
-
-
 @router.post("/rooms/{room_id}/posts", operation_id="postUpdate", status_code=201)
-async def post_update(
+def post_update(
     room_id: str,
-    request: Request,
+    raw: JsonBody,
     store: Annotated[StoreProtocol, Depends(get_store)],
     actor: Annotated[Actor, Depends(get_actor)],
 ) -> FeedEvent:
-    body = await _json_object(request)
+    body = raw.object()
 
     # A missing text counts as empty; an explicit non-string (including null) is an error.
     text = body.get("text", "")

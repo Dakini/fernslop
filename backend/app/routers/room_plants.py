@@ -5,15 +5,15 @@ applies, bumps the room's ``last_activity_at`` to the event's ``created_at``,
 and calls ``live.notify`` once after the store transaction has ended.
 """
 
-import json
 import math
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Response
 
 from app import live, timestamps
 from app.auth import Actor, get_actor
+from app.body import JsonBody
 from app.errors import ApiError
 from app.models import (
     DeletePlantPayload,
@@ -41,16 +41,6 @@ CARE_TYPES = {
     "prune": ("last_pruned_at", "prune_every_days", "pruned"),
     "harvest": ("last_harvested_at", "harvest_every_days", "harvested"),
 }
-
-
-async def _json_object(request: Request) -> dict[str, Any]:
-    try:
-        body = json.loads(await request.body())
-    except ValueError:  # invalid JSON, or bytes that are not UTF-8
-        raise ApiError(400, "Request body is not valid JSON") from None
-    if not isinstance(body, dict):
-        raise ApiError(400, "Request body must be a JSON object")
-    return body
 
 
 def _coordinate(body: dict[str, Any], field: str) -> float:
@@ -110,13 +100,13 @@ def _record(
 
 
 @router.post("/rooms/{room_id}/plants", operation_id="addPlant", status_code=201)
-async def add_plant(
+def add_plant(
     room_id: str,
-    request: Request,
+    raw: JsonBody,
     store: Annotated[StoreProtocol, Depends(get_store)],
     actor: Annotated[Actor, Depends(get_actor)],
 ) -> RoomPlant:
-    body = await _json_object(request)
+    body = raw.object()
     plant_id = body.get("plant_id")
     if not isinstance(plant_id, str):
         raise ApiError(400, "plant_id must be a string")
@@ -160,13 +150,13 @@ async def add_plant(
 
 
 @router.patch("/room-plants/{room_plant_id}", operation_id="movePlant")
-async def move_plant(
+def move_plant(
     room_plant_id: str,
-    request: Request,
+    raw: JsonBody,
     store: Annotated[StoreProtocol, Depends(get_store)],
     actor: Annotated[Actor, Depends(get_actor)],
 ) -> RoomPlant:
-    body = await _json_object(request)
+    body = raw.object()
     x_pct = _coordinate(body, "x_pct")
     y_pct = _coordinate(body, "y_pct")
 
@@ -211,13 +201,13 @@ def remove_plant(
 
 
 @router.post("/room-plants/{room_plant_id}/care", operation_id="markCare")
-async def mark_care(
+def mark_care(
     room_plant_id: str,
-    request: Request,
+    raw: JsonBody,
     store: Annotated[StoreProtocol, Depends(get_store)],
     actor: Annotated[Actor, Depends(get_actor)],
 ) -> RoomPlant:
-    body = await _json_object(request)
+    body = raw.object()
     care = body.get("care")
     if not isinstance(care, str) or care not in CARE_TYPES:
         raise ApiError(400, "care must be one of: " + ", ".join(CARE_TYPES))

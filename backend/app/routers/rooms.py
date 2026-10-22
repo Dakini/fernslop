@@ -1,12 +1,12 @@
 """Rooms: list, create, get state and delete."""
 
-import json
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Response
 
 from app import live, timestamps
+from app.body import JsonBody
 from app.errors import ApiError
 from app.models import Room, RoomState, RoomSummary, RoomSummaryPlant
 from app.store import StoreProtocol, get_store
@@ -37,16 +37,6 @@ def _checked(value: str, label: str, max_length: int) -> str:
     return value
 
 
-async def _json_object(request: Request) -> dict[str, Any]:
-    try:
-        body = json.loads(await request.body())
-    except ValueError:  # invalid JSON, or bytes that are not UTF-8
-        raise ApiError(400, "Request body is not valid JSON") from None
-    if not isinstance(body, dict):
-        raise ApiError(400, "Request body must be a JSON object")
-    return body
-
-
 def _newest_first(room: Room) -> tuple:
     return (room.last_activity_at, room.created_at)
 
@@ -66,8 +56,8 @@ def list_rooms(store: Annotated[StoreProtocol, Depends(get_store)]) -> list[Room
 
 
 @router.post("/rooms", operation_id="createRoom", status_code=201)
-async def create_room(request: Request, store: Annotated[StoreProtocol, Depends(get_store)]) -> Room:
-    body = await _json_object(request)
+def create_room(raw: JsonBody, store: Annotated[StoreProtocol, Depends(get_store)]) -> Room:
+    body = raw.object()
     name = body.get("name")
     if not isinstance(name, str) or not name.strip():
         raise ApiError(400, NAME_REQUIRED_MESSAGE)
