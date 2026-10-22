@@ -28,3 +28,5 @@
 **Edge cases:** The email is trimmed and lowercased. Following again with the same email (ignoring case) returns 200 with the existing follow, and a new follow returns 201. An invalid email returns 400 `That email doesn't look right`. The response must never contain the unsubscribe token (`additionalProperties: false`), so add a test that checks this. Unsubscribe is idempotent and returns `unsubscribed: false` for an unknown token. Following does not bump `last_activity_at` or the live stream. An unknown room returns 404.
 
 ## Comments
+
+**Engineer:** Implemented `POST /api/rooms/{roomId}/follows` and `POST /api/follows/unsubscribe` in `backend/app/routers/follows.py` (registered in `routers/__init__.py`), with tests in `backend/app/test_follows.py` (one or more per criterion, including a check that the stored token never appears in the 201 or 200 bodies). Room is checked before the body, so an unknown room is 404 even with a bad email or bad JSON. Email check is a plain regex (`local@domain.tld`, one `@`, no spaces, no empty domain labels). No side effects on the room, feed or `live.notify`. `uv run pytest` in `backend/`: 494 passed. Issue left open for QA.
