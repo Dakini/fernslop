@@ -29,6 +29,10 @@ info:
     Every error response has an `Error` body. The frontend shows `message` directly
     to the user (for example in a toast), so it must be a short, human-readable message.
 
+    Every operation with a JSON request body takes at most 64 KB, sent as
+    `application/json`, and answers `413` or `415` otherwise (see
+    `components/responses/JsonBodyTooLarge` and `NotJson`).
+
     ## Soft deletes
     Room plants and areas are never hard-deleted. Removing one sets `deleted_at`,
     so the action can be undone. Rows with `deleted_at` set are never returned by
@@ -106,6 +110,10 @@ paths:
               schema: { $ref: "#/components/schemas/Room" }
         "400":
           $ref: "#/components/responses/BadRequest"
+        "413":
+          $ref: "#/components/responses/JsonBodyTooLarge"
+        "415":
+          $ref: "#/components/responses/NotJson"
 
   /rooms/{roomId}:
     get:
@@ -278,6 +286,10 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "413":
+          $ref: "#/components/responses/JsonBodyTooLarge"
+        "415":
+          $ref: "#/components/responses/NotJson"
 
   /room-plants/{roomPlantId}:
     patch:
@@ -310,6 +322,10 @@ paths:
               schema: { $ref: "#/components/schemas/RoomPlant" }
         "404":
           $ref: "#/components/responses/RoomPlantGone"
+        "413":
+          $ref: "#/components/responses/JsonBodyTooLarge"
+        "415":
+          $ref: "#/components/responses/NotJson"
     delete:
       tags: [Room plants]
       operationId: removePlant
@@ -364,6 +380,10 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "413":
+          $ref: "#/components/responses/JsonBodyTooLarge"
+        "415":
+          $ref: "#/components/responses/NotJson"
 
   /rooms/{roomId}/areas:
     post:
@@ -396,6 +416,10 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
+        "413":
+          $ref: "#/components/responses/JsonBodyTooLarge"
+        "415":
+          $ref: "#/components/responses/NotJson"
 
   /areas/{areaId}:
     patch:
@@ -425,6 +449,10 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "404":
           $ref: "#/components/responses/AreaNotFound"
+        "413":
+          $ref: "#/components/responses/JsonBodyTooLarge"
+        "415":
+          $ref: "#/components/responses/NotJson"
     delete:
       tags: [Areas]
       operationId: deleteArea
@@ -484,6 +512,10 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "404":
           $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/JsonBodyTooLarge"
+        "415":
+          $ref: "#/components/responses/NotJson"
 
   /photos:
     post:
@@ -637,6 +669,10 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "404":
           $ref: "#/components/responses/NotFound"
+        "413":
+          $ref: "#/components/responses/JsonBodyTooLarge"
+        "415":
+          $ref: "#/components/responses/NotJson"
 
   /follows/unsubscribe:
     post:
@@ -668,6 +704,10 @@ paths:
                 required: [unsubscribed]
                 properties:
                   unsubscribed: { type: boolean }
+        "413":
+          $ref: "#/components/responses/JsonBodyTooLarge"
+        "415":
+          $ref: "#/components/responses/NotJson"
 
   /rooms/{roomId}/live:
     get:
@@ -758,6 +798,21 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
     AreaNotFound:
       description: The area doesn't exist or has been removed. Message is `Area not found`.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    JsonBodyTooLarge:
+      description: |
+        The JSON body is over 64 KB (65536 bytes), whether or not `Content-Length` is sent.
+        Nothing is written. Message is `Request body is too large`.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotJson:
+      description: |
+        The body was not sent as `application/json` (for example `text/plain`, or no
+        `Content-Type`). Parameters and case are ignored, so `application/json; charset=utf-8`
+        is accepted. Nothing is written. Message is `Send the request body as application/json`.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
