@@ -20,8 +20,7 @@ ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
     PYTHONUNBUFFERED=1 \
     PATH="/app/.venv/bin:$PATH" \
-    FERNSLOP_STATIC_DIR=/app/static \
-    FERNSLOP_DATABASE_URL=sqlite:////data/fernslop.db
+    FERNSLOP_STATIC_DIR=/app/static
 
 WORKDIR /app
 
@@ -34,8 +33,10 @@ COPY --from=frontend /frontend/dist/client ./static
 RUN useradd --system --create-home --uid 10001 fernslop \
     && mkdir /data && chown fernslop /data
 USER fernslop
-VOLUME /data
 EXPOSE 8000
 
+# The database is not baked in: pass FERNSLOP_DATABASE_URL (a SQLAlchemy URL) at run time, e.g.
+#   -e FERNSLOP_DATABASE_URL=sqlite:////data/fernslop.db -v fernslop-data:/data
+# /data is writable by the app user so a named volume mounted there works for SQLite.
 # One worker: the live SSE feed is in-process (see backlog/parked/090-api-live-multi-worker.md).
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["sh", "-c", "[ -n \"$FERNSLOP_DATABASE_URL\" ] || { echo 'FERNSLOP_DATABASE_URL is not set' >&2; exit 1; }; exec uvicorn app.main:app --host 0.0.0.0 --port 8000"]
