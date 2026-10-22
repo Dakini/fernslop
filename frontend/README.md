@@ -28,3 +28,13 @@ cd <repository-name>
 npm i
 npm run dev
 ```
+
+## Backend selection
+
+The app runs against an in-browser mock by default. To use the real backend
+(`backend/`, served on :8000), set these in `.env.local` (or the environment):
+
+| Variable            | Default | Meaning                                                              |
+| ------------------- | ------- | -------------------------------------------------------------------- |
+| `VITE_USE_MOCK`     | unset   | Anything but `false` uses the mock; `false` uses the HTTP service.   |
+| `VITE_API_BASE_URL` | `/api`  | API base URL (trailing slash tolerated). `vite dev` proxies `/api` to `http://localhost:8000`. |

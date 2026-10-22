@@ -12,4 +12,6 @@ export default defineConfig({
     // nitro/vite builds from this
     server: { entry: "server" },
   },
+  // Dev: forward /api (the default VITE_API_BASE_URL) to the backend started with `uv run uvicorn app.main:app`.
+  vite: { server: { proxy: { "/api": "http://localhost:8000" } } },
 });
