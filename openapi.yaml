@@ -43,9 +43,14 @@ info:
     so the action can be undone. Rows with `deleted_at` set are never returned by
     the read endpoints.
 
-    Rooms are the exception: `deleteRoom` hard-deletes a room and everything in it
-    (plants, areas, feed events, follows, and photos only that room's posts used).
-    It cannot be undone.
+    Rooms are soft-deleted too: `deleteRoom` marks the room deleted and keeps
+    everything in it. From then on the room is left out of `listRooms` and every
+    other call on it answers 404, exactly like a room that never existed; the
+    deletion time is never returned. Users cannot undo it, but for 7 days an
+    operator can restore the room with all its data (`python -m app.room_restore`).
+    After 7 days a purge job (`python -m app.room_purge`) removes the room for good
+    with its plants, areas, feed events, follows, and the photos only its posts used.
+    Until the purge, the photos of a deleted room stay reachable by their URL.
 
     ## Room identity and limits
     Rooms are identified by a server-generated UUID (`Room.id`), which is also the
@@ -151,23 +156,26 @@ paths:
       tags: [Rooms]
       operationId: deleteRoom
       x-service-method: deleteRoom
-      summary: Delete a room for good (hard delete)
+      summary: Delete a room (soft delete, purged after 7 days)
       description: |
-        Permanently deletes the room and all its plants (including removed ones), areas,
-        feed events (including undone ones) and follows; a follow's old unsubscribe link
-        then answers "already unsubscribed". A photo only this room's posts use is deleted
-        too. Open `/rooms/{roomId}/live` streams get a final `change` message and end.
+        Marks the room deleted; nothing in it is removed yet (see "Soft deletes").
+        The room disappears from `listRooms`, every other call on it answers 404, and
+        the weekly digest skips it. Open `/rooms/{roomId}/live` streams get a final
+        `change` message and end. Users cannot undo it; for 7 days an operator can
+        restore it. After that a purge removes the room and all its plants (including
+        removed ones), areas, feed events (including undone ones) and follows for good,
+        plus any photo only this room's posts use; a follow's old unsubscribe link then
+        answers "already unsubscribed".
         Anyone with the link can call it: no actor headers.
 
-        Idempotent: it answers 204 whether the room was just deleted, was already gone (a
-        second call, or two people confirming at the same moment) or never existed (also an
-        id that is not a UUID). Only the call that removes the room changes anything.
-        Every other call on a deleted room still answers 404.
+        Idempotent: it answers 204 whether the room was just deleted, was already deleted
+        (a second call, or two people confirming at the same moment) or never existed (also
+        an id that is not a UUID). Only the call that marks the room changes anything.
       parameters:
         - $ref: "#/components/parameters/RoomId"
       responses:
         "204":
-          description: The room is gone (deleted now, or already gone).
+          description: The room is deleted (now, or already before).
 
   /plants:
     get:

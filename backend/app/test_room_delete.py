@@ -1,16 +1,17 @@
 import asyncio
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app import digest, live, sql_store, timestamps
+from app import digest, live, room_purge, room_restore, timestamps
 from app.main import app
 from app.models import RoomArea
 from app.sql_store import SqlStore
 from app.store import get_store
-from app.test_store import make_event, make_follow, make_photo, make_room_plant
+from app.test_store import make_event, make_follow, make_photo
 
 HEADERS = {"X-Device-Id": "device-1", "X-Actor-Name": "Tess"}
 UNKNOWN_ID = "00000000-0000-4000-8000-000000000000"
@@ -56,55 +57,35 @@ def post_with_photo(api, room_id, photo):
 # --- Delete ----------------------------------------------------------------
 
 
-def test_delete_room_removes_the_room_and_all_its_data_and_keeps_it_gone_after_a_restart(tmp_path):
+def test_delete_room_hides_the_room_from_the_api_but_keeps_all_its_data_after_a_restart(tmp_path):
     url = f"sqlite:///{tmp_path / 'fern.db'}"
     store = SqlStore(url)
     app.dependency_overrides[get_store] = lambda: store
     try:
         api = TestClient(app)
-        room, other = store.list_rooms()[:2]
-        store.save_room_plant(make_room_plant(id="rp-gone", room_id=room.id, deleted_at=timestamps.now()))
-        store.save_area(make_area(room.id))
-        store.save_feed_event(make_event(id="ev-undone", room_id=room.id, undone_at=timestamps.now()))
-        store.save_follow(make_follow(id="f-gone", room_id=room.id, unsubscribe_token="tok-gone"))
-        plants_before = store.list_plants()
+        room = store.list_rooms()[0]
+        store.save_follow(make_follow(id="f-kept", room_id=room.id, unsubscribe_token="tok-kept"))
+        kept = (store.list_room_plants(room.id), store.list_areas(room.id), store.list_feed_events(room.id))
 
         response = api.delete(f"/api/rooms/{room.id}")  # no actor headers
 
         assert (response.status_code, response.content) == (204, b"")
         assert api.get(f"/api/rooms/{room.id}").status_code == 404
-        assert [s["room"]["id"] for s in api.get("/api/rooms").json()].count(room.id) == 0
-        assert store.list_room_plants(room.id, include_deleted=True) == []
-        assert store.list_areas(room.id, include_deleted=True) == []
-        assert store.list_feed_events(room.id) == []
-        assert store.list_follows(room.id) == []
-        assert api.post("/api/follows/unsubscribe", json={"token": "tok-gone"}).json() == {"unsubscribed": False}
-        assert store.list_plants() == plants_before
+        listed = api.get("/api/rooms").json()
+        assert room.id not in [s["room"]["id"] for s in listed]
+        assert all("deleted_at" not in s["room"] for s in listed)
         assert room.id not in {d.room_id for d in digest.build_digests(store, timestamps.now())}
-        assert store.get_room(other.id) is not None
-
         restarted = SqlStore(url)
         assert restarted.get_room(room.id) is None
-        assert len(restarted.list_rooms()) == 2
+        assert [r.id for r in restarted.list_deleted_rooms()] == [room.id]
+        assert (
+            restarted.list_room_plants(room.id),
+            restarted.list_areas(room.id),
+            restarted.list_feed_events(room.id),
+        ) == kept
+        assert [f.id for f in restarted.list_follows(room.id)] == ["f-kept"]
     finally:
         app.dependency_overrides.pop(get_store, None)
-
-
-def test_delete_room_removes_photos_only_that_room_used_and_keeps_shared_and_unposted_ones(api, store):
-    room, other = store.list_rooms()[:2]
-    only_here, shared, unposted = make_photo(PHOTO_IDS[0]), make_photo(PHOTO_IDS[1]), make_photo(PHOTO_IDS[2])
-    for photo in (only_here, shared, unposted):
-        store.save_photo(photo)
-    post_with_photo(api, room.id, only_here)
-    post_with_photo(api, room.id, shared)
-    # Posting a photo twice is now refused (#199), but posts from before that can still share one.
-    store.save_feed_event(make_event(id="ev-shared", room_id=other.id, photo_url=shared.url))
-
-    assert api.delete(f"/api/rooms/{room.id}").status_code == 204
-
-    assert api.get(only_here.url).status_code == 404
-    assert api.get(shared.url).status_code == 200
-    assert api.get(unposted.url).status_code == 200
 
 
 def test_delete_room_is_idempotent_and_later_calls_on_the_room_give_404(api, store, monkeypatch):
@@ -112,12 +93,15 @@ def test_delete_room_is_idempotent_and_later_calls_on_the_room_give_404(api, sto
     monkeypatch.setattr(live, "close_room", closed.append)
     room_id = store.list_rooms()[0].id
     other_rooms = [r for r in store.list_rooms() if r.id != room_id]
+    # The room's rows are kept by the soft delete, so their own endpoints must 404 too.
+    room_plant = store.list_room_plants(room_id)[0]
+    event = store.list_feed_events(room_id)[0]
 
     for delete_id in (room_id, room_id, UNKNOWN_ID, "not-a-uuid"):  # first, second, unknown, non-UUID
         response = api.delete(f"/api/rooms/{delete_id}")
         assert (response.status_code, response.content) == (204, b"")
         assert store.list_rooms() == other_rooms  # the repeats changed nothing
-    assert closed == [room_id]  # only the delete that removed data closes the streams
+    assert closed == [room_id]  # only the delete that marked the room closes the streams
     calls = [
         api.get(f"/api/rooms/{room_id}"),
         api.post(f"/api/rooms/{room_id}/posts", json={"text": "hi"}, headers=HEADERS),
@@ -127,9 +111,14 @@ def test_delete_room_is_idempotent_and_later_calls_on_the_room_give_404(api, sto
         api.get(f"/api/rooms/{room_id}/live"),
     ]
     assert [(r.status_code, r.json()) for r in calls] == [(404, NOT_FOUND)] * len(calls)
+    by_child = [
+        api.patch(f"/api/room-plants/{room_plant.id}", json={"x_pct": 5, "y_pct": 5}, headers=HEADERS),
+        api.post(f"/api/feed-events/{event.id}/undo", headers=HEADERS),
+    ]
+    assert [r.status_code for r in by_child] == [404] * len(by_child)
 
 
-def test_delete_room_by_two_people_at_once_gives_both_204_leaves_nothing_and_closes_streams_once(api, store, monkeypatch):
+def test_delete_room_by_two_people_at_once_gives_both_204_marks_it_once_and_closes_streams_once(api, store, monkeypatch):
     closed = []
     monkeypatch.setattr(live, "close_room", closed.append)
     room_id = store.list_rooms()[0].id
@@ -145,29 +134,7 @@ def test_delete_room_by_two_people_at_once_gives_both_204_leaves_nothing_and_clo
     assert statuses == [204, 204]
     assert closed == [room_id]
     assert store.get_room(room_id) is None
-    assert store.list_room_plants(room_id, include_deleted=True) == []
-    assert store.list_feed_events(room_id) == []
-    assert store.list_follows(room_id) == []
-
-
-def test_delete_room_that_fails_midway_changes_nothing_and_does_not_close_streams(store, monkeypatch):
-    api = TestClient(app, raise_server_exceptions=False)
-    room = store.list_rooms()[0]
-    before = (store.list_rooms(), store.list_room_plants(room.id), store.list_feed_events(room.id))
-    assert any(e.photo_url for e in before[2])  # the photo step is the last one, after the rows are deleted
-    closed = []
-    monkeypatch.setattr(live, "close_room", closed.append)
-
-    def boom(*args, **kwargs):
-        raise RuntimeError("boom")
-
-    monkeypatch.setattr(sql_store, "exists", boom)
-
-    response = api.delete(f"/api/rooms/{room.id}")
-
-    assert response.status_code == 500
-    assert (store.list_rooms(), store.list_room_plants(room.id), store.list_feed_events(room.id)) == before
-    assert closed == []
+    assert [r.id for r in store.list_deleted_rooms()] == [room_id]
 
 
 # --- Live streams ------------------------------------------------------------
@@ -192,3 +159,69 @@ def test_delete_room_sends_open_streams_a_last_change_and_ends_them(api, store, 
     asyncio.run(scenario())
 
     assert live.subscriber_count(room_id) == 0
+
+
+# --- Purge and restore -------------------------------------------------------
+
+
+def soft_delete(api, store, room_id, days_ago):
+    """Delete through the API, then backdate the mark by ``days_ago`` days."""
+    assert api.delete(f"/api/rooms/{room_id}").status_code == 204
+    [room] = [r for r in store.list_deleted_rooms() if r.id == room_id]
+    store.save_room(room.model_copy(update={"deleted_at": timestamps.now() - timedelta(days=days_ago)}))
+
+
+def test_purge_removes_rooms_deleted_over_7_days_ago_with_their_data_and_keeps_younger_ones(
+    api, store, monkeypatch, capsys
+):
+    monkeypatch.setattr(room_purge, "get_store", lambda: store)
+    old, young, live_room = store.list_rooms()[:3]
+    only_old, shared = make_photo(PHOTO_IDS[0]), make_photo(PHOTO_IDS[1])
+    for photo in (only_old, shared):
+        store.save_photo(photo)
+    post_with_photo(api, old.id, only_old)
+    post_with_photo(api, old.id, shared)
+    # Posting a photo twice is refused (#199), but posts from before that can still share one.
+    store.save_feed_event(make_event(id="ev-shared", room_id=young.id, photo_url=shared.url))
+    store.save_follow(make_follow(id="f-old", room_id=old.id, unsubscribe_token="tok-old"))
+    soft_delete(api, store, old.id, days_ago=8)
+    soft_delete(api, store, young.id, days_ago=6)
+
+    first = room_purge.main([])
+    second = room_purge.main([])
+
+    assert (first, second) == (0, 0)
+    assert capsys.readouterr().out.splitlines() == ["Purged 1 room(s)", "Purged 0 room(s)"]
+    assert [r.id for r in store.list_deleted_rooms()] == [young.id]
+    assert store.list_room_plants(old.id, include_deleted=True) == []
+    assert store.list_areas(old.id, include_deleted=True) == []
+    assert store.list_feed_events(old.id) == []
+    assert api.post("/api/follows/unsubscribe", json={"token": "tok-old"}).json() == {"unsubscribed": False}
+    assert api.get(only_old.url).status_code == 404
+    assert api.get(shared.url).status_code == 200  # the young deleted room's post still uses it
+    assert store.list_feed_events(young.id) != []
+    assert store.get_room(live_room.id) is not None
+
+
+def test_restore_brings_a_deleted_room_back_with_its_data_and_rejects_live_or_unknown_ids(
+    api, store, monkeypatch, capsys
+):
+    monkeypatch.setattr(room_restore, "get_store", lambda: store)
+    room, live_room = store.list_rooms()[:2]
+    store.save_follow(make_follow(id="f-back", room_id=room.id, unsubscribe_token="tok-back"))
+    before = api.get(f"/api/rooms/{room.id}").json()
+    soft_delete(api, store, room.id, days_ago=3)
+    rooms_before = len(store.list_rooms())
+
+    listed = room_restore.main(["--list"])
+    restored = room_restore.main([room.id])
+    refused = [room_restore.main([room.id]), room_restore.main([live_room.id]), room_restore.main([UNKNOWN_ID])]
+
+    out = capsys.readouterr()
+    assert (listed, restored, refused) == (0, 0, [1, 1, 1])
+    assert out.out.splitlines()[0].startswith(f"{room.id}\t{room.name}\tdeleted at ")
+    assert out.err.count("No deleted room with id") == 3
+    assert api.get(f"/api/rooms/{room.id}").json() == before
+    assert [f.id for f in store.list_follows(room.id)] == ["f-back"]
+    assert [s["room"]["id"] for s in api.get("/api/rooms").json()].count(room.id) == 1
+    assert len(store.list_rooms()) == rooms_before + 1  # a seed garden comes back once, never re-seeded

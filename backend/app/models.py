@@ -225,6 +225,16 @@ class RoomFollow(ApiModel):
 # --- Stored-only types -------------------------------------------------------
 
 
+class StoredRoom(Room):
+    """A room as kept by the store. ``deleted_at`` set means soft-deleted (purged after 7 days).
+
+    Only the purge and restore commands see it: the store hands routers plain ``Room``s of live rooms,
+    so ``deleted_at`` never reaches an API response. Rows saved before #196 have no ``deleted_at``: live.
+    """
+
+    deleted_at: Timestamp | None = None
+
+
 class StoredFollow(RoomFollow):
     """A follow as kept by the store, with its secret unsubscribe token."""
 
