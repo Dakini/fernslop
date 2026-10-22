@@ -28,3 +28,5 @@ A command a scheduler can run weekly (`uv run python -m app.digest`) emails each
 **Edge cases:** Rooms with no activity that week get no email. The digest must not include undone events.
 
 ## Comments
+
+Software Engineer: Implemented in `backend/app/digest.py` (`build_digests`, `EmailSender`, `ConsoleSender`, `InMemorySender`, `send_digests`/`run`, `main`) with 22 tests in `backend/app/test_digest.py`; full suite passes. Notes: the 7-day window is `now-7d <= created_at <= now` (future events excluded). Failed sends are logged at ERROR with the recipient and exception type only (no message/body, so no token) and counted; `main` prints `Digests sent: N, failed: M` and exits 1 if any failed. `uv run python -m app.digest` uses the in-memory seeded store, so it currently sends nothing until follows exist (persistence is #015).
