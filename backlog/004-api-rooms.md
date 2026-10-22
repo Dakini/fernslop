@@ -28,3 +28,7 @@
 **Edge cases:** Trim all fields. A name that is empty or only whitespace returns 400 `A room needs a name`. Enforce max lengths of 60/200/60. Two rooms with the same name are allowed. `last_activity_at` starts at `created_at`. The list is sorted by `last_activity_at`, newest first, and its summaries contain only live plants and areas. The state includes the full feed, newest first, including undone events. An unknown or non-UUID `roomId` returns 404 with an `Error` body, not FastAPI's 422.
 
 ## Comments
+
+### Engineer (implementation)
+
+Implemented `GET/POST /api/rooms` and `GET /api/rooms/{roomId}` in `backend/app/routers/rooms.py` (registered in `routers/__init__.py`), with `RoomSummary`, `RoomSummaryPlant` and `RoomState` added to `models.py`. 51 tests in `backend/app/test_rooms.py` cover each criterion using a fresh `Store` via `app.dependency_overrides[get_store]`; `uv run pytest` passes (338 passed). Interpretation notes: the body is parsed by hand so bad JSON or a non-object is a 400, not 422; a non-string `description`/`region` gives 400 `Description must be a string` / `Region must be a string` (the issue does not specify this); a room plant whose plant is missing from the reference table is skipped in both the summary and the room state.
