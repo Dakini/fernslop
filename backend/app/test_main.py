@@ -152,7 +152,9 @@ def make_room(id: str) -> Room:
     return Room(id=id, name="Scratch", description="", region="", created_at=now, last_activity_at=now)
 
 
-def test_get_store_returns_the_module_level_store():
+def test_get_store_returns_the_module_level_store(monkeypatch):
+    monkeypatch.delenv("FERNSLOP_DB_PATH", raising=False)
+
     assert get_store() is store
     assert isinstance(get_store(), Store)
 

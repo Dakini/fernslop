@@ -7,6 +7,7 @@ limits or business rules: lookups return ``None`` or an empty list, and routers
 decide the status code.
 """
 
+import os
 import threading
 from collections.abc import Iterator
 from contextlib import AbstractContextManager, contextmanager
@@ -69,6 +70,9 @@ def _copy(record: M) -> M:
     return record.model_copy(deep=True)
 
 
+_TABLES = ("_plants", "_rooms", "_room_plants", "_areas", "_feed_events", "_follows", "_photos")
+
+
 class Store:
     """Holds all application data in memory.
 
@@ -79,6 +83,7 @@ class Store:
     def __init__(self, *, seed: bool = True) -> None:
         self._seed = seed
         self._lock = threading.RLock()
+        self._depth = 0
         self.reset()
 
     def _clear(self) -> None:
@@ -95,9 +100,26 @@ class Store:
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
-        """Hold the store lock. Re-entrant; it does not roll back on error."""
+        """Hold the store lock. Re-entrant. If the outermost block raises, every change in it is undone."""
         with self._lock:
-            yield
+            if self._depth > 0:
+                self._depth += 1
+                try:
+                    yield
+                finally:
+                    self._depth -= 1
+                return
+            # Stored records are never mutated in place, so copies of the dicts are enough.
+            snapshot = {name: dict(getattr(self, name)) for name in _TABLES}
+            self._depth = 1
+            try:
+                yield
+            except BaseException:
+                for name, table in snapshot.items():
+                    setattr(self, name, table)
+                raise
+            finally:
+                self._depth = 0
 
     def reset(self) -> None:
         """Discard everything and return to how this store was built (seeded or empty)."""
@@ -247,9 +269,25 @@ class Store:
             self._photos[photo.id] = _copy(photo)
 
 
+DB_PATH_ENV = "FERNSLOP_DB_PATH"
+
 store = Store()
+_sqlite_stores: dict[str, StoreProtocol] = {}
+_sqlite_lock = threading.Lock()
 
 
 def get_store() -> StoreProtocol:
-    """FastAPI dependency that returns the store. The one place that picks the implementation."""
-    return store
+    """FastAPI dependency that returns the store. The one place that picks the implementation.
+
+    With ``FERNSLOP_DB_PATH`` set it is the SQLite store on that file (created on first use),
+    otherwise the in-memory ``store``.
+    """
+    path = os.environ.get(DB_PATH_ENV)
+    if not path:
+        return store
+    with _sqlite_lock:
+        if path not in _sqlite_stores:
+            from app.sqlite_store import SqliteStore
+
+            _sqlite_stores[path] = SqliteStore(path)
+        return _sqlite_stores[path]

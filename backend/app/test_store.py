@@ -1,5 +1,6 @@
 import re
 import threading
+import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -8,6 +9,7 @@ from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+from app.main import app
 from app.models import (
     FeedEvent,
     Room,
@@ -17,6 +19,7 @@ from app.models import (
     StoredFollow,
     StoredPhoto,
 )
+from app.sqlite_store import SqliteStore
 from app.store import Store, StoreProtocol, get_store, store
 
 T0 = datetime(2026, 10, 22, 9, 30, 0, tzinfo=UTC)
@@ -114,12 +117,21 @@ def empty_store() -> Store:
     return Store(seed=False)
 
 
+# Every behaviour test below runs against both stores through this one fixture.
+@pytest.fixture(params=["memory", "sqlite"])
+def new_store(request, tmp_path):
+    """A factory: ``new_store()`` is seeded, ``new_store(seed=False)`` is empty."""
+    if request.param == "memory":
+        return lambda seed=True: Store(seed=seed)
+    return lambda seed=True: SqliteStore(tmp_path / "test.db", seed=seed)
+
+
 # --- Protocol and construction -----------------------------------------------
 
 
-def test_store_implements_the_store_protocol():
-    assert isinstance(Store(), StoreProtocol)
-    assert isinstance(empty_store(), StoreProtocol)
+def test_store_implements_the_store_protocol(new_store):
+    assert isinstance(new_store(), StoreProtocol)
+    assert isinstance(new_store(seed=False), StoreProtocol)
 
 
 def test_store_protocol_declares_exactly_the_documented_methods():
@@ -128,27 +140,29 @@ def test_store_protocol_declares_exactly_the_documented_methods():
     assert declared == set(PROTOCOL_METHODS)
 
 
-def test_get_store_returns_the_module_level_store():
+def test_get_store_returns_the_module_level_store_when_no_database_path_is_set(monkeypatch):
+    monkeypatch.delenv("FERNSLOP_DB_PATH", raising=False)
+
     assert get_store() is store
 
 
-def test_store_built_with_seed_has_the_seed():
-    fresh = Store()
+def test_store_built_with_seed_has_the_seed(new_store):
+    fresh = new_store()
 
     assert len(fresh.list_plants()) == 51
     assert len(fresh.list_rooms()) == 3
 
 
-def test_store_built_without_seed_is_empty():
-    fresh = empty_store()
+def test_store_built_without_seed_is_empty(new_store):
+    fresh = new_store(seed=False)
 
     assert fresh.list_plants() == []
     assert fresh.list_rooms() == []
     assert fresh.get_photo("anything") is None
 
 
-def test_store_without_seed_stays_empty_after_reset():
-    fresh = empty_store()
+def test_store_without_seed_stays_empty_after_reset(new_store):
+    fresh = new_store(seed=False)
     fresh.save_room(make_room())
 
     fresh.reset()
@@ -175,16 +189,16 @@ def test_empty_store_can_be_injected_with_a_dependency_override():
 # --- Plants ------------------------------------------------------------------
 
 
-def test_list_plants_keeps_the_seed_order():
-    plants = Store().list_plants()
+def test_list_plants_keeps_the_seed_order(new_store):
+    plants = new_store().list_plants()
 
     assert plants[0].id == "plant-basil"
     assert plants[10].id == "plant-tomato"
     assert plants[-1].id == "plant-japanese-maple"
 
 
-def test_get_plant_returns_the_plant_or_none():
-    s = Store()
+def test_get_plant_returns_the_plant_or_none(new_store):
+    s = new_store()
 
     assert s.get_plant("plant-tomato").common_name == "Tomato"
     assert s.get_plant("plant-nope") is None
@@ -192,8 +206,8 @@ def test_get_plant_returns_the_plant_or_none():
     assert s.get_plant("not-a-uuid") is None
 
 
-def test_plants_are_copies_so_mutating_one_does_not_change_the_store():
-    s = Store()
+def test_plants_are_copies_so_mutating_one_does_not_change_the_store(new_store):
+    s = new_store()
 
     s.get_plant("plant-tomato").common_name = "Changed"
     s.list_plants()[0].common_name = "Changed"
@@ -205,16 +219,16 @@ def test_plants_are_copies_so_mutating_one_does_not_change_the_store():
 # --- Rooms -------------------------------------------------------------------
 
 
-def test_save_room_inserts_and_get_room_returns_it():
-    s = empty_store()
+def test_save_room_inserts_and_get_room_returns_it(new_store):
+    s = new_store(seed=False)
 
     s.save_room(make_room())
 
     assert s.get_room("room-1") == make_room()
 
 
-def test_save_room_with_an_existing_id_replaces_it_in_place():
-    s = empty_store()
+def test_save_room_with_an_existing_id_replaces_it_in_place(new_store):
+    s = new_store(seed=False)
     s.save_room(make_room("a"))
     s.save_room(make_room("b"))
 
@@ -224,24 +238,24 @@ def test_save_room_with_an_existing_id_replaces_it_in_place():
     assert s.get_room("a").name == "Renamed"
 
 
-def test_list_rooms_returns_insertion_order():
-    s = empty_store()
+def test_list_rooms_returns_insertion_order(new_store):
+    s = new_store(seed=False)
     for room_id in ["c", "a", "b"]:
         s.save_room(make_room(room_id))
 
     assert [r.id for r in s.list_rooms()] == ["c", "a", "b"]
 
 
-def test_get_room_with_unknown_ids_returns_none():
-    s = empty_store()
+def test_get_room_with_unknown_ids_returns_none(new_store):
+    s = new_store(seed=False)
 
     assert s.get_room("missing") is None
     assert s.get_room("") is None
     assert s.get_room("not-a-uuid") is None
 
 
-def test_fetched_room_is_a_copy_so_renaming_it_does_not_change_the_store():
-    s = empty_store()
+def test_fetched_room_is_a_copy_so_renaming_it_does_not_change_the_store(new_store):
+    s = new_store(seed=False)
     s.save_room(make_room(name="Original"))
 
     fetched = s.get_room("room-1")
@@ -250,8 +264,8 @@ def test_fetched_room_is_a_copy_so_renaming_it_does_not_change_the_store():
     assert s.get_room("room-1").name == "Original"
 
 
-def test_listed_rooms_are_copies():
-    s = empty_store()
+def test_listed_rooms_are_copies(new_store):
+    s = new_store(seed=False)
     s.save_room(make_room(name="Original"))
 
     s.list_rooms()[0].name = "Changed"
@@ -259,8 +273,8 @@ def test_listed_rooms_are_copies():
     assert s.get_room("room-1").name == "Original"
 
 
-def test_room_mutated_after_save_does_not_change_the_stored_record():
-    s = empty_store()
+def test_room_mutated_after_save_does_not_change_the_stored_record(new_store):
+    s = new_store(seed=False)
     room = make_room(name="Original")
     s.save_room(room)
 
@@ -272,8 +286,8 @@ def test_room_mutated_after_save_does_not_change_the_stored_record():
 # --- Room plants -------------------------------------------------------------
 
 
-def test_save_room_plant_inserts_replaces_in_place_and_keeps_listing_order():
-    s = empty_store()
+def test_save_room_plant_inserts_replaces_in_place_and_keeps_listing_order(new_store):
+    s = new_store(seed=False)
     s.save_room_plant(make_room_plant("a"))
     s.save_room_plant(make_room_plant("b"))
 
@@ -283,16 +297,16 @@ def test_save_room_plant_inserts_replaces_in_place_and_keeps_listing_order():
     assert s.get_room_plant("a").x_pct == 99
 
 
-def test_list_room_plants_only_returns_plants_of_that_room():
-    s = empty_store()
+def test_list_room_plants_only_returns_plants_of_that_room(new_store):
+    s = new_store(seed=False)
     s.save_room_plant(make_room_plant("a", room_id="room-1"))
     s.save_room_plant(make_room_plant("b", room_id="room-2"))
 
     assert [p.id for p in s.list_room_plants("room-2")] == ["b"]
 
 
-def test_list_room_plants_leaves_out_soft_deleted_unless_asked():
-    s = empty_store()
+def test_list_room_plants_leaves_out_soft_deleted_unless_asked(new_store):
+    s = new_store(seed=False)
     s.save_room_plant(make_room_plant("live"))
     s.save_room_plant(make_room_plant("gone", deleted_at=T0))
 
@@ -300,15 +314,15 @@ def test_list_room_plants_leaves_out_soft_deleted_unless_asked():
     assert [p.id for p in s.list_room_plants("room-1", include_deleted=True)] == ["live", "gone"]
 
 
-def test_get_room_plant_returns_soft_deleted_rows():
-    s = empty_store()
+def test_get_room_plant_returns_soft_deleted_rows(new_store):
+    s = new_store(seed=False)
     s.save_room_plant(make_room_plant("gone", deleted_at=T0))
 
     assert s.get_room_plant("gone").deleted_at == T0
 
 
-def test_room_plant_unknown_ids_and_rooms_return_none_and_empty_lists():
-    s = empty_store()
+def test_room_plant_unknown_ids_and_rooms_return_none_and_empty_lists(new_store):
+    s = new_store(seed=False)
 
     assert s.get_room_plant("missing") is None
     assert s.get_room_plant("") is None
@@ -317,8 +331,8 @@ def test_room_plant_unknown_ids_and_rooms_return_none_and_empty_lists():
     assert s.list_room_plants("missing-room", include_deleted=True) == []
 
 
-def test_room_plants_are_copies_in_both_directions():
-    s = empty_store()
+def test_room_plants_are_copies_in_both_directions(new_store):
+    s = new_store(seed=False)
     plant = make_room_plant()
     s.save_room_plant(plant)
 
@@ -332,8 +346,8 @@ def test_room_plants_are_copies_in_both_directions():
 # --- Areas -------------------------------------------------------------------
 
 
-def test_save_area_inserts_replaces_in_place_and_keeps_listing_order():
-    s = empty_store()
+def test_save_area_inserts_replaces_in_place_and_keeps_listing_order(new_store):
+    s = new_store(seed=False)
     s.save_area(make_area("a"))
     s.save_area(make_area("b"))
 
@@ -343,8 +357,8 @@ def test_save_area_inserts_replaces_in_place_and_keeps_listing_order():
     assert s.get_area("a").label == "Renamed"
 
 
-def test_list_areas_leaves_out_soft_deleted_unless_asked():
-    s = empty_store()
+def test_list_areas_leaves_out_soft_deleted_unless_asked(new_store):
+    s = new_store(seed=False)
     s.save_area(make_area("live"))
     s.save_area(make_area("gone", deleted_at=T0))
 
@@ -352,15 +366,15 @@ def test_list_areas_leaves_out_soft_deleted_unless_asked():
     assert [a.id for a in s.list_areas("room-1", include_deleted=True)] == ["live", "gone"]
 
 
-def test_get_area_returns_soft_deleted_rows():
-    s = empty_store()
+def test_get_area_returns_soft_deleted_rows(new_store):
+    s = new_store(seed=False)
     s.save_area(make_area("gone", deleted_at=T0))
 
     assert s.get_area("gone").deleted_at == T0
 
 
-def test_area_unknown_ids_and_rooms_return_none_and_empty_lists():
-    s = empty_store()
+def test_area_unknown_ids_and_rooms_return_none_and_empty_lists(new_store):
+    s = new_store(seed=False)
 
     assert s.get_area("missing") is None
     assert s.get_area("") is None
@@ -368,8 +382,8 @@ def test_area_unknown_ids_and_rooms_return_none_and_empty_lists():
     assert s.list_areas("missing-room") == []
 
 
-def test_areas_are_copies_in_both_directions():
-    s = empty_store()
+def test_areas_are_copies_in_both_directions(new_store):
+    s = new_store(seed=False)
     area = make_area()
     s.save_area(area)
 
@@ -383,16 +397,16 @@ def test_areas_are_copies_in_both_directions():
 # --- Feed events -------------------------------------------------------------
 
 
-def test_save_feed_event_inserts_and_get_feed_event_returns_it():
-    s = empty_store()
+def test_save_feed_event_inserts_and_get_feed_event_returns_it(new_store):
+    s = new_store(seed=False)
 
     s.save_feed_event(make_event())
 
     assert s.get_feed_event("ev-1") == make_event()
 
 
-def test_list_feed_events_is_newest_first_by_created_at():
-    s = empty_store()
+def test_list_feed_events_is_newest_first_by_created_at(new_store):
+    s = new_store(seed=False)
     s.save_feed_event(make_event("old", created_at=T0))
     s.save_feed_event(make_event("new", created_at=T0 + timedelta(hours=2)))
     s.save_feed_event(make_event("mid", created_at=T0 + timedelta(hours=1)))
@@ -400,23 +414,23 @@ def test_list_feed_events_is_newest_first_by_created_at():
     assert [e.id for e in s.list_feed_events("room-1")] == ["new", "mid", "old"]
 
 
-def test_list_feed_events_puts_later_saved_first_when_timestamps_match():
-    s = empty_store()
+def test_list_feed_events_puts_later_saved_first_when_timestamps_match(new_store):
+    s = new_store(seed=False)
     for event_id in ["first", "second", "third"]:
         s.save_feed_event(make_event(event_id, created_at=T0))
 
     assert [e.id for e in s.list_feed_events("room-1")] == ["third", "second", "first"]
 
 
-def test_list_feed_events_includes_undone_events():
-    s = empty_store()
+def test_list_feed_events_includes_undone_events(new_store):
+    s = new_store(seed=False)
     s.save_feed_event(make_event("undone", undone_at=T0))
 
     assert [e.id for e in s.list_feed_events("room-1")] == ["undone"]
 
 
-def test_replacing_a_feed_event_keeps_its_position():
-    s = empty_store()
+def test_replacing_a_feed_event_keeps_its_position(new_store):
+    s = new_store(seed=False)
     s.save_feed_event(make_event("a", created_at=T0))
     s.save_feed_event(make_event("b", created_at=T0))
 
@@ -426,16 +440,16 @@ def test_replacing_a_feed_event_keeps_its_position():
     assert s.get_feed_event("a").undone_at == T0
 
 
-def test_list_feed_events_only_returns_events_of_that_room():
-    s = empty_store()
+def test_list_feed_events_only_returns_events_of_that_room(new_store):
+    s = new_store(seed=False)
     s.save_feed_event(make_event("a", room_id="room-1"))
     s.save_feed_event(make_event("b", room_id="room-2"))
 
     assert [e.id for e in s.list_feed_events("room-2")] == ["b"]
 
 
-def test_feed_event_unknown_ids_and_rooms_return_none_and_empty_lists():
-    s = empty_store()
+def test_feed_event_unknown_ids_and_rooms_return_none_and_empty_lists(new_store):
+    s = new_store(seed=False)
 
     assert s.get_feed_event("missing") is None
     assert s.get_feed_event("") is None
@@ -443,8 +457,8 @@ def test_feed_event_unknown_ids_and_rooms_return_none_and_empty_lists():
     assert s.list_feed_events("missing-room") == []
 
 
-def test_feed_events_are_copies_in_both_directions():
-    s = empty_store()
+def test_feed_events_are_copies_in_both_directions(new_store):
+    s = new_store(seed=False)
     event = make_event()
     s.save_feed_event(event)
 
@@ -458,8 +472,8 @@ def test_feed_events_are_copies_in_both_directions():
 # --- Follows -----------------------------------------------------------------
 
 
-def test_save_follow_inserts_and_replaces_in_place():
-    s = empty_store()
+def test_save_follow_inserts_and_replaces_in_place(new_store):
+    s = new_store(seed=False)
     s.save_follow(make_follow("a", email="a@example.com", unsubscribe_token="t-a"))
     s.save_follow(make_follow("b", email="b@example.com", unsubscribe_token="t-b"))
 
@@ -468,23 +482,23 @@ def test_save_follow_inserts_and_replaces_in_place():
     assert [f.email for f in s.list_follows("room-1")] == ["new@example.com", "b@example.com"]
 
 
-def test_get_follow_by_email_is_case_insensitive():
-    s = empty_store()
+def test_get_follow_by_email_is_case_insensitive(new_store):
+    s = new_store(seed=False)
     s.save_follow(make_follow(email="Mixed.Case@Example.com"))
 
     assert s.get_follow_by_email("room-1", "mixed.case@example.COM").id == "f-1"
 
 
-def test_get_follow_by_email_is_scoped_to_the_room():
-    s = empty_store()
+def test_get_follow_by_email_is_scoped_to_the_room(new_store):
+    s = new_store(seed=False)
     s.save_follow(make_follow())
 
     assert s.get_follow_by_email("room-2", "a@example.com") is None
     assert s.get_follow_by_email("room-1", "other@example.com") is None
 
 
-def test_get_follow_by_token_finds_the_follow_in_any_room():
-    s = empty_store()
+def test_get_follow_by_token_finds_the_follow_in_any_room(new_store):
+    s = new_store(seed=False)
     s.save_follow(make_follow("f-1", room_id="room-1", unsubscribe_token="tok-1"))
     s.save_follow(make_follow("f-2", room_id="room-2", unsubscribe_token="tok-2"))
 
@@ -493,8 +507,8 @@ def test_get_follow_by_token_finds_the_follow_in_any_room():
     assert s.get_follow_by_token("") is None
 
 
-def test_delete_follow_removes_it_and_reports_whether_it_existed():
-    s = empty_store()
+def test_delete_follow_removes_it_and_reports_whether_it_existed(new_store):
+    s = new_store(seed=False)
     s.save_follow(make_follow())
 
     first = s.delete_follow("f-1")
@@ -505,12 +519,12 @@ def test_delete_follow_removes_it_and_reports_whether_it_existed():
     assert s.get_follow_by_token("tok-1") is None
 
 
-def test_list_follows_for_an_unknown_room_is_empty():
-    assert empty_store().list_follows("missing-room") == []
+def test_list_follows_for_an_unknown_room_is_empty(new_store):
+    assert new_store(seed=False).list_follows("missing-room") == []
 
 
-def test_follows_are_copies_in_both_directions():
-    s = empty_store()
+def test_follows_are_copies_in_both_directions(new_store):
+    s = new_store(seed=False)
     follow = make_follow()
     s.save_follow(follow)
 
@@ -540,8 +554,8 @@ def test_room_follow_rejects_unknown_fields():
 # --- Photos ------------------------------------------------------------------
 
 
-def test_save_photo_inserts_and_replaces_by_id():
-    s = empty_store()
+def test_save_photo_inserts_and_replaces_by_id(new_store):
+    s = new_store(seed=False)
     s.save_photo(make_photo())
 
     s.save_photo(make_photo(data=b"new bytes"))
@@ -549,23 +563,23 @@ def test_save_photo_inserts_and_replaces_by_id():
     assert s.get_photo("photo-1").data == b"new bytes"
 
 
-def test_get_photo_with_unknown_ids_returns_none():
-    s = empty_store()
+def test_get_photo_with_unknown_ids_returns_none(new_store):
+    s = new_store(seed=False)
 
     assert s.get_photo("missing") is None
     assert s.get_photo("") is None
     assert s.get_photo("not-a-uuid") is None
 
 
-def test_seeded_photo_is_available_by_id():
-    s = Store()
+def test_seeded_photo_is_available_by_id(new_store):
+    s = new_store()
     photo_id = s.list_feed_events(s.list_rooms()[0].id)[0].photo_url.rsplit("/", 1)[1]
 
     assert s.get_photo(photo_id).content_type == "image/png"
 
 
-def test_photos_are_copies():
-    s = empty_store()
+def test_photos_are_copies(new_store):
+    s = new_store(seed=False)
     photo = make_photo()
     s.save_photo(photo)
 
@@ -578,8 +592,8 @@ def test_photos_are_copies():
 # --- Transactions ------------------------------------------------------------
 
 
-def test_nested_transactions_in_one_thread_do_not_deadlock():
-    s = empty_store()
+def test_nested_transactions_in_one_thread_do_not_deadlock(new_store):
+    s = new_store(seed=False)
 
     with s.transaction():
         with s.transaction():
@@ -588,21 +602,60 @@ def test_nested_transactions_in_one_thread_do_not_deadlock():
     assert s.get_room("room-1") is not None
 
 
-def test_transaction_does_not_roll_back_when_the_block_raises():
-    s = empty_store()
+def test_transaction_rolls_back_every_save_and_delete_when_the_block_raises(new_store):
+    s = new_store(seed=False)
+    s.save_room(make_room("kept"))
+    s.save_follow(make_follow())
 
-    try:
+    with pytest.raises(RuntimeError):
         with s.transaction():
-            s.save_room(make_room())
+            s.save_room(make_room("kept", name="Changed"))
+            s.save_room(make_room("added"))
+            s.delete_follow("f-1")
+            with s.transaction():
+                s.save_photo(make_photo())
             raise RuntimeError("boom")
-    except RuntimeError:
-        pass
 
-    assert s.get_room("room-1") is not None
+    assert [(r.id, r.name) for r in s.list_rooms()] == [("kept", "Test room")]
+    assert s.get_follow_by_token("tok-1") is not None
+    assert s.get_photo("photo-1") is None
 
 
-def test_two_threads_cannot_be_inside_a_transaction_at_once():
-    s = empty_store()
+def test_twenty_threads_counting_then_saving_in_a_transaction_end_with_twenty_records(new_store):
+    s = new_store(seed=False)
+    stop = threading.Event()
+    torn = []
+
+    def worker():
+        with s.transaction():
+            n = len(s.list_rooms()) // 2
+            s.save_room(make_room(f"r{n}"))
+            time.sleep(0.001)
+            s.save_room(make_room(f"r{n}-second"))
+
+    def reader():
+        # Each transaction saves two rooms, so an odd count would be half of one.
+        while not stop.is_set():
+            if len(s.list_rooms()) % 2:
+                torn.append(True)
+
+    watcher = threading.Thread(target=reader)
+    watcher.start()
+    threads = [threading.Thread(target=worker) for _ in range(20)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    stop.set()
+    watcher.join(timeout=5)
+
+    assert len(s.list_rooms()) == 40
+    assert len({r.id for r in s.list_rooms() if not r.id.endswith("-second")}) == 20
+    assert torn == []
+
+
+def test_two_threads_cannot_be_inside_a_transaction_at_once(new_store):
+    s = new_store(seed=False)
     inside = threading.Event()
     release = threading.Event()
     entered_second = threading.Event()
@@ -631,8 +684,8 @@ def test_two_threads_cannot_be_inside_a_transaction_at_once():
     assert entered_second.is_set()
 
 
-def test_reset_waits_for_a_transaction_held_by_another_thread():
-    s = Store()
+def test_reset_waits_for_a_transaction_held_by_another_thread(new_store):
+    s = new_store()
     inside = threading.Event()
     release = threading.Event()
     reset_done = threading.Event()
@@ -664,8 +717,8 @@ def test_reset_waits_for_a_transaction_held_by_another_thread():
 # --- Reset -------------------------------------------------------------------
 
 
-def test_reset_restores_the_seed_after_changes():
-    s = Store()
+def test_reset_restores_the_seed_after_changes(new_store):
+    s = new_store()
     seeded_rooms = [r.id for r in s.list_rooms()]
     live_counts = {rid: len(s.list_room_plants(rid)) for rid in seeded_rooms}
     first_room = seeded_rooms[0]
@@ -683,8 +736,8 @@ def test_reset_restores_the_seed_after_changes():
     assert s.get_follow_by_token("tok-1") is None
 
 
-def test_reset_can_be_called_repeatedly():
-    s = Store()
+def test_reset_can_be_called_repeatedly(new_store):
+    s = new_store()
     ids = [r.id for r in s.list_rooms()]
 
     for _ in range(3):
@@ -694,8 +747,8 @@ def test_reset_can_be_called_repeatedly():
     assert [r.id for r in s.list_rooms()] == ids
 
 
-def test_reset_keeps_room_ids_and_event_ids_identical():
-    s = Store()
+def test_reset_keeps_room_ids_and_event_ids_identical(new_store):
+    s = new_store()
     room_id = s.list_rooms()[0].id
     event_ids = [e.id for e in s.list_feed_events(room_id)]
 
@@ -705,8 +758,8 @@ def test_reset_keeps_room_ids_and_event_ids_identical():
     assert [e.id for e in s.list_feed_events(room_id)] == event_ids
 
 
-def test_reset_restores_the_plant_table_without_reading_files(monkeypatch):
-    s = Store()
+def test_reset_restores_the_plant_table_without_reading_files(monkeypatch, new_store):
+    s = new_store()
 
     def no_files(*args, **kwargs):
         raise AssertionError("reset must not read files")
@@ -718,8 +771,8 @@ def test_reset_restores_the_plant_table_without_reading_files(monkeypatch):
     assert len(s.list_plants()) == 51
 
 
-def test_seeded_feed_events_list_newest_first():
-    s = Store()
+def test_seeded_feed_events_list_newest_first(new_store):
+    s = new_store()
     room_id = s.list_rooms()[0].id
 
     stamps = [e.created_at for e in s.list_feed_events(room_id)]
@@ -728,8 +781,8 @@ def test_seeded_feed_events_list_newest_first():
     assert s.list_feed_events(room_id)[0].type == "post"
 
 
-def test_seeded_soft_deleted_rows_are_hidden_from_default_listings():
-    s = Store()
+def test_seeded_soft_deleted_rows_are_hidden_from_default_listings(new_store):
+    s = new_store()
     elm, balcony = s.list_rooms()[0], s.list_rooms()[1]
 
     assert len(s.list_room_plants(elm.id)) == 4
@@ -753,3 +806,36 @@ def test_nothing_outside_store_and_seed_reaches_into_the_stores_internals():
                 offenders.append(f"{path.name}:{number}")
 
     assert offenders == []
+
+
+# --- SQLite persistence ------------------------------------------------------
+
+
+def test_sqlite_store_keeps_data_across_a_restart_and_never_reseeds(tmp_path, monkeypatch):
+    path = tmp_path / "fern.db"
+    monkeypatch.setenv("FERNSLOP_DB_PATH", str(path))
+    first = get_store()
+    assert isinstance(first, SqliteStore) and path.exists()
+    seeded_room = first.list_rooms()[0]
+    first.save_room(seeded_room.model_copy(update={"name": "Edited"}))
+    first.save_room(make_room("mine"))
+    first.save_room_plant(make_room_plant(room_id="mine"))
+    first.save_follow(make_follow(room_id="mine"))
+    undo = {"kind": "delete_plant", "room_plant_id": "rp-1"}
+    first.save_feed_event(make_event(room_id="mine", undo_payload=undo))
+    first.save_photo(make_photo("5f0f2f6e-0000-4000-8000-000000000001", data=bytes(range(256))))
+    first.delete_follow("f-1")
+    first.save_follow(make_follow("f-2", room_id="mine", unsubscribe_token="tok-2"))
+
+    reopened = SqliteStore(path)
+
+    assert reopened.get_room(seeded_room.id).name == "Edited"
+    assert len(reopened.list_rooms()) == 4
+    assert reopened.get_room_plant("rp-1") == make_room_plant(room_id="mine")
+    assert reopened.get_feed_event("ev-1").undo_payload.room_plant_id == "rp-1"
+    assert [f.id for f in reopened.list_follows("mine")] == ["f-2"]
+    client = TestClient(app)
+    response = client.get("/api/photos/5f0f2f6e-0000-4000-8000-000000000001")
+    assert response.content == bytes(range(256))
+    reopened.reset()
+    assert reopened.get_room(seeded_room.id).name == seeded_room.name
