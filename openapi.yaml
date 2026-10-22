@@ -1,0 +1,901 @@
+openapi: 3.1.0
+info:
+  title: Fernslop API
+  version: 0.1.0
+  description: |
+    The backend the Fernslop frontend expects.
+
+    The UI calls the backend only through the `GardenService` interface
+    (`frontend/src/services/types.ts`). It currently runs against an in-browser mock
+    (`frontend/src/services/mock/mockService.ts`). Each operation below maps 1:1 to a
+    `GardenService` method, named in `x-service-method`. Status codes and error
+    messages follow the mock's behaviour.
+
+    ## Authentication
+    There are **no user accounts** and **no endpoint requires authentication**. Anyone
+    with a room's link can read and edit it.
+
+    Edits to a room's contents are made by an anonymous **actor**: a random
+    `device_id` (UUID) and a display name, stored in the browser's localStorage
+    (`frontend/src/lib/identity.ts`). Those endpoints require the `X-Device-Id` and
+    `X-Actor-Name` headers, which the server records on the feed event it writes.
+    They are self-asserted. The server uses them to attribute edits, not to authorise
+    them. In this spec they are modelled as the `actor` security scheme, so
+    "requires actor" means "requires these headers".
+
+    Unsubscribing uses the follow's `unsubscribe_token` as a bearer capability.
+
+    ## Errors
+    Every error response has an `Error` body. The frontend shows `message` directly
+    to the user (for example in a toast), so it must be a short, human-readable message.
+
+    ## Soft deletes
+    Room plants and areas are never hard-deleted. Removing one sets `deleted_at`,
+    so the action can be undone. Rows with `deleted_at` set are never returned by
+    the read endpoints.
+
+    ## Room activity
+    Every successful room mutation (except following a room) updates the room's
+    `last_activity_at` and pushes a `change` message to that room's live-update stream.
+servers:
+  - url: /api
+    description: Same-origin API prefix (choose any; the frontend has no base URL yet)
+
+security: []
+
+tags:
+  - name: Rooms
+  - name: Plants
+    description: The read-only plant reference table
+  - name: Room plants
+    description: Plants placed on a room's canvas
+  - name: Areas
+    description: Labelled areas (beds, ponds) on a room's canvas
+  - name: Feed
+  - name: Follows
+  - name: Realtime
+
+paths:
+  /rooms:
+    get:
+      tags: [Rooms]
+      operationId: listRooms
+      x-service-method: listRooms
+      summary: List all rooms with thumbnail data
+      description: Sorted by `last_activity_at`, most recent first. Excludes soft-deleted plants and areas.
+      responses:
+        "200":
+          description: Room summaries
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/RoomSummary" }
+    post:
+      tags: [Rooms]
+      operationId: createRoom
+      x-service-method: createRoom
+      summary: Create a room
+      description: |
+        Trims all fields. The server derives `slug` from `name`: lowercase, NFKD-normalised,
+        runs of non-`[a-z0-9]` replaced by `-`, leading and trailing `-` stripped, at most
+        40 characters, and `garden` if nothing is left. If the slug is taken, it appends
+        `-2`, `-3`, and so on. This endpoint does not require an actor and writes no feed event.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateRoomInput" }
+      responses:
+        "201":
+          description: Room created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Room" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /rooms/by-slug/{slug}:
+    get:
+      tags: [Rooms]
+      operationId: getRoomState
+      x-service-method: getRoomState
+      summary: Get everything needed to render a room
+      description: |
+        Returns live (not soft-deleted) plants and areas, plus the full feed, newest first.
+        The feed includes events that were undone; their `undone_at` is set.
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema: { type: string }
+          example: elm-street-allotment
+      responses:
+        "200":
+          description: Room state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RoomState" }
+        "404":
+          description: No room with this slug. The frontend shows its "garden not found" page.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /plants:
+    get:
+      tags: [Plants]
+      operationId: listPlants
+      x-service-method: listPlants
+      summary: List the whole plant reference table
+      description: "The frontend caches this response forever (`staleTime: Infinity`), so it should be stable."
+      responses:
+        "200":
+          description: All plants
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Plant" }
+
+  /plants/search:
+    get:
+      tags: [Plants]
+      operationId: searchPlants
+      x-service-method: searchPlants
+      summary: Search plants by name
+      description: |
+        Case-insensitive substring match on `common_name` or `scientific_name`.
+        If `q` is empty or only whitespace, returns the first 12 plants.
+      parameters:
+        - name: q
+          in: query
+          required: false
+          schema: { type: string, default: "" }
+      responses:
+        "200":
+          description: Matching plants
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Plant" }
+
+  /plants/identify:
+    post:
+      tags: [Plants]
+      operationId: identifyPlant
+      x-service-method: identifyPlant
+      summary: Identify a plant from a photo
+      description: |
+        Sends the photo to a third-party plant ID API using a server-side key, then maps the
+        results to rows in the plant reference table. Returns up to 3 candidates, highest
+        confidence first. The user picks one before anything is added to a room.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: JPEG, PNG or WebP, at most 5 MB (5 × 1024 × 1024 bytes).
+            encoding:
+              file:
+                contentType: image/jpeg, image/png, image/webp
+      responses:
+        "200":
+          description: Candidates (may be empty)
+          content:
+            application/json:
+              schema:
+                type: array
+                maxItems: 3
+                items: { $ref: "#/components/schemas/IdentifyCandidate" }
+        "413":
+          description: File is over 5 MB. Message is `That photo is over 5 MB`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "415":
+          description: File is not JPEG, PNG or WebP. Message is `Please use a JPG, PNG or WebP image`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "502":
+          description: The upstream identification API failed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /rooms/{roomId}/plants:
+    post:
+      tags: [Room plants]
+      operationId: addPlant
+      x-service-method: addPlant
+      summary: Add a plant to a room
+      description: |
+        Places the plant at the canvas centre (`x_pct` = `y_pct` = 50) with `added_by_name`
+        set to the actor's name. Writes a `plant_added` feed event whose undo payload is
+        `delete_plant`.
+      security: [{ actor: [] }]
+      parameters:
+        - $ref: "#/components/parameters/RoomId"
+        - $ref: "#/components/parameters/ActorName"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [plant_id]
+              properties:
+                plant_id: { type: string }
+      responses:
+        "201":
+          description: Plant added
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RoomPlant" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The room already has 50 live plants.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /room-plants/{roomPlantId}:
+    patch:
+      tags: [Room plants]
+      operationId: movePlant
+      x-service-method: movePlant
+      summary: Move a plant on the canvas
+      description: |
+        Clamps coordinates to 0–100. Writes a `plant_moved` feed event whose undo payload is
+        `restore_plant` with the row as it was before the move.
+      security: [{ actor: [] }]
+      parameters:
+        - $ref: "#/components/parameters/RoomPlantId"
+        - $ref: "#/components/parameters/ActorName"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [x_pct, y_pct]
+              properties:
+                x_pct: { type: number }
+                y_pct: { type: number }
+      responses:
+        "200":
+          description: Updated plant
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RoomPlant" }
+        "404":
+          $ref: "#/components/responses/RoomPlantGone"
+    delete:
+      tags: [Room plants]
+      operationId: removePlant
+      x-service-method: removePlant
+      summary: Remove a plant (soft delete)
+      description: Sets `deleted_at`. Writes a `plant_removed` feed event whose undo payload is `restore_plant`.
+      security: [{ actor: [] }]
+      parameters:
+        - $ref: "#/components/parameters/RoomPlantId"
+        - $ref: "#/components/parameters/ActorName"
+      responses:
+        "204":
+          description: Removed
+        "404":
+          $ref: "#/components/responses/RoomPlantGone"
+
+  /room-plants/{roomPlantId}/care:
+    post:
+      tags: [Room plants]
+      operationId: markCare
+      x-service-method: markCare
+      summary: Record that a care task was done
+      description: |
+        Sets the matching timestamp to now: water → `last_watered_at`, feed → `last_fed_at`,
+        prune → `last_pruned_at`, harvest → `last_harvested_at`. Writes a `care_done` feed
+        event whose undo payload is `restore_plant`.
+      security: [{ actor: [] }]
+      parameters:
+        - $ref: "#/components/parameters/RoomPlantId"
+        - $ref: "#/components/parameters/ActorName"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [care]
+              properties:
+                care: { $ref: "#/components/schemas/CareType" }
+      responses:
+        "200":
+          description: Updated plant
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RoomPlant" }
+        "404":
+          $ref: "#/components/responses/RoomPlantGone"
+        "422":
+          description: |
+            The plant's `<care>_every_days` interval is null or 0, so this care type
+            doesn't apply. Message is `No <care> data for this plant`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /rooms/{roomId}/areas:
+    post:
+      tags: [Areas]
+      operationId: addArea
+      x-service-method: addArea
+      summary: Add an area to a room
+      description: Writes an `area_changed` feed event whose undo payload is `restore_area` with `area` set to null.
+      security: [{ actor: [] }]
+      parameters:
+        - $ref: "#/components/parameters/RoomId"
+        - $ref: "#/components/parameters/ActorName"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AreaInput" }
+      responses:
+        "201":
+          description: Area created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RoomArea" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The room already has 10 live areas.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /areas/{areaId}:
+    patch:
+      tags: [Areas]
+      operationId: updateArea
+      x-service-method: updateArea
+      summary: Update an area (rename, move, resize)
+      description: |
+        Partial update; omitted fields are unchanged. Writes an `area_changed` feed event whose
+        undo payload is `restore_area` with the area as it was before the change.
+      security: [{ actor: [] }]
+      parameters:
+        - $ref: "#/components/parameters/AreaId"
+        - $ref: "#/components/parameters/ActorName"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AreaPatch" }
+      responses:
+        "200":
+          description: Updated area
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RoomArea" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/AreaNotFound"
+    delete:
+      tags: [Areas]
+      operationId: deleteArea
+      x-service-method: deleteArea
+      summary: Remove an area (soft delete)
+      description: Sets `deleted_at`. Writes an `area_changed` feed event whose undo payload is `restore_area` with the area as it was before.
+      security: [{ actor: [] }]
+      parameters:
+        - $ref: "#/components/parameters/AreaId"
+        - $ref: "#/components/parameters/ActorName"
+      responses:
+        "204":
+          description: Removed
+        "404":
+          $ref: "#/components/responses/AreaNotFound"
+
+  /rooms/{roomId}/posts:
+    post:
+      tags: [Feed]
+      operationId: postUpdate
+      x-service-method: postUpdate
+      summary: Post a message and/or photo to the room feed
+      description: |
+        Creates a `post` feed event with no undo payload. `text` is trimmed and at least one of
+        `text` and `photo_url` must be non-empty.
+
+        **Note:** the current UI sends the photo as a `data:image/...;base64,` URL
+        (from FileReader, original file at most 5 MB, so up to about 7 MB of text). The product spec says photos
+        should go to object storage instead. Until an upload endpoint exists, the server must
+        accept data URLs here.
+      security: [{ actor: [] }]
+      parameters:
+        - $ref: "#/components/parameters/RoomId"
+        - $ref: "#/components/parameters/ActorName"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text, photo_url]
+              properties:
+                text: { type: string }
+                photo_url:
+                  type: [string, "null"]
+                  description: An http(s) URL or a `data:` URL.
+      responses:
+        "201":
+          description: Feed event created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FeedEvent" }
+        "400":
+          description: Both text and photo are empty. Message is `Write something or add a photo`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /feed-events/{eventId}/undo:
+    post:
+      tags: [Feed]
+      operationId: undoEvent
+      x-service-method: undoEvent
+      summary: Undo a feed event
+      description: |
+        Applies the event's `undo_payload` and sets `undone_at`. The frontend sends the actor,
+        but the mock does not record who undid the event and writes no new feed event.
+        - `restore_plant`: write `room_plant` back exactly, including clearing `deleted_at`.
+        - `delete_plant`: soft-delete the room plant.
+        - `restore_area` with `area: null`: soft-delete the area.
+        - `restore_area` with an area: write that area back exactly.
+      security: [{ actor: [] }]
+      parameters:
+        - name: eventId
+          in: path
+          required: true
+          schema: { type: string }
+        - $ref: "#/components/parameters/ActorName"
+      responses:
+        "204":
+          description: Undone
+        "404":
+          description: Event not found.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: |
+            The event has no undo payload (message `This can't be undone`) or has already
+            been undone (message `Already undone`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /rooms/{roomId}/follows:
+    post:
+      tags: [Follows]
+      operationId: followRoom
+      x-service-method: followRoom
+      summary: Follow a room by email
+      description: |
+        No actor is needed. The server trims and lowercases the email. Following again with
+        the same email returns the existing follow. A weekly digest is sent only if the room
+        had activity that week; that is a scheduled job, not an endpoint.
+
+        **Security note:** the frontend type expects `unsubscribe_token` in this response, but
+        the UI never reads it. Returning it lets anyone unsubscribe any address they know.
+        Consider leaving it out and sending it only by email.
+      parameters:
+        - $ref: "#/components/parameters/RoomId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email: { type: string, format: email }
+      responses:
+        "201":
+          description: New follow created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RoomFollow" }
+        "200":
+          description: This email already follows the room
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/RoomFollow" }
+        "400":
+          description: Invalid email. Message is `That email doesn't look right`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /follows/unsubscribe:
+    post:
+      tags: [Follows]
+      operationId: unfollow
+      x-service-method: unfollow
+      summary: Unsubscribe using the token from a digest email
+      description: |
+        Idempotent. Returns `unsubscribed: false` if the token matched nothing. No UI route
+        calls this yet; the one-click link in digest emails will.
+      security: [{ unsubscribeToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string }
+      responses:
+        "200":
+          description: Result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [unsubscribed]
+                properties:
+                  unsubscribed: { type: boolean }
+
+  /rooms/{roomId}/live:
+    get:
+      tags: [Realtime]
+      operationId: subscribe
+      x-service-method: subscribe
+      summary: Live change notifications for a room (Server-Sent Events)
+      description: |
+        A long-lived `text/event-stream`. The server sends `event: change` with `data: <roomId>`
+        after any mutation in the room, including mutations by other clients. The frontend
+        doesn't need a diff. On each message it refetches `GET /rooms/by-slug/{slug}` and
+        `GET /rooms`. Send a comment line (`: ping`) every 25 s or so to keep the connection
+        open. Clients reconnect with EventSource's built-in retry.
+      parameters:
+        - $ref: "#/components/parameters/RoomId"
+      responses:
+        "200":
+          description: Event stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+              example: |
+                event: change
+                data: room_abc123
+
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+components:
+  securitySchemes:
+    actor:
+      type: apiKey
+      in: header
+      name: X-Device-Id
+      description: |
+        Not authentication. The anonymous actor's stable device UUID, generated in the
+        browser. Must be sent together with the `X-Actor-Name` header. Stored as
+        `FeedEvent.device_id`.
+    unsubscribeToken:
+      type: http
+      scheme: bearer
+      description: |
+        For documentation only. The capability is the `token` field in the request body,
+        not an Authorization header.
+
+  parameters:
+    RoomId:
+      name: roomId
+      in: path
+      required: true
+      schema: { type: string }
+    RoomPlantId:
+      name: roomPlantId
+      in: path
+      required: true
+      schema: { type: string }
+    AreaId:
+      name: areaId
+      in: path
+      required: true
+      schema: { type: string }
+    ActorName:
+      name: X-Actor-Name
+      in: header
+      required: true
+      description: |
+        The actor's display name, for example `Anonymous Hedgehog` (at most 40 characters).
+        Stored as `FeedEvent.actor_name` and, for new plants, `RoomPlant.added_by_name`.
+        Send it percent-encoded (UTF-8), since header values are ASCII-only.
+      schema: { type: string, maxLength: 120 }
+
+  responses:
+    BadRequest:
+      description: Invalid request body
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Room (or referenced plant) not found
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    RoomPlantGone:
+      description: The room plant doesn't exist or has been removed. Message is `Plant is no longer in this garden`.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    AreaNotFound:
+      description: The area doesn't exist or has been removed. Message is `Area not found`.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Error:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+          description: Shown to the user as-is.
+
+    Timestamp:
+      type: string
+      format: date-time
+      description: ISO 8601 in UTC, for example `2026-10-22T09:30:00.000Z`. The frontend compares these as strings, so always use this exact format.
+
+    PlantCategory:
+      type: string
+      enum: [flower, vegetable, herb, houseplant, shrub, tree]
+
+    CareType:
+      type: string
+      enum: [water, feed, prune, harvest]
+
+    AreaShape:
+      type: string
+      enum: [rect, ellipse]
+
+    AreaColour:
+      type: string
+      enum: [soil, water, sage, clay]
+      description: The frontend renders unknown values as `soil`.
+
+    Percent:
+      type: number
+      minimum: 0
+      maximum: 100
+      description: Percentage of canvas width or height, so positions scale.
+
+    Plant:
+      type: object
+      required: [id, common_name, scientific_name, category, description, image_url,
+                 water_every_days, feed_every_days, prune_every_days, harvest_every_days,
+                 source, source_url]
+      properties:
+        id: { type: string, example: plant-tomato }
+        common_name: { type: string }
+        scientific_name: { type: string }
+        category: { $ref: "#/components/schemas/PlantCategory" }
+        description: { type: string }
+        image_url: { type: [string, "null"] }
+        water_every_days:
+          type: [integer, "null"]
+          description: Null or 0 means this care type doesn't apply. The same applies to the other three intervals.
+        feed_every_days: { type: [integer, "null"] }
+        prune_every_days: { type: [integer, "null"] }
+        harvest_every_days: { type: [integer, "null"] }
+        source: { type: string, description: Where the care data came from }
+        source_url: { type: string }
+
+    Room:
+      type: object
+      required: [id, slug, name, description, region, created_at, last_activity_at]
+      properties:
+        id: { type: string }
+        slug: { type: string, description: "Unique; used in the URL `/r/{slug}`" }
+        name: { type: string }
+        description: { type: string, description: Empty string when not set }
+        region: { type: string, description: Empty string when not set }
+        created_at: { $ref: "#/components/schemas/Timestamp" }
+        last_activity_at: { $ref: "#/components/schemas/Timestamp" }
+
+    CreateRoomInput:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          maxLength: 60
+          description: Must contain more than whitespace; otherwise 400 with `A room needs a name`.
+        description: { type: string, maxLength: 200 }
+        region: { type: string, maxLength: 60 }
+
+    RoomPlant:
+      type: object
+      required: [id, room_id, plant_id, nickname, x_pct, y_pct, last_watered_at, last_fed_at,
+                 last_pruned_at, last_harvested_at, added_by_name, created_at, deleted_at]
+      properties:
+        id: { type: string }
+        room_id: { type: string }
+        plant_id: { type: string }
+        nickname: { type: [string, "null"], description: No endpoint sets this yet }
+        x_pct: { $ref: "#/components/schemas/Percent" }
+        y_pct: { $ref: "#/components/schemas/Percent" }
+        last_watered_at:
+          oneOf: [{ $ref: "#/components/schemas/Timestamp" }, { type: "null" }]
+          description: When null, care timers count from `created_at`.
+        last_fed_at:
+          oneOf: [{ $ref: "#/components/schemas/Timestamp" }, { type: "null" }]
+        last_pruned_at:
+          oneOf: [{ $ref: "#/components/schemas/Timestamp" }, { type: "null" }]
+        last_harvested_at:
+          oneOf: [{ $ref: "#/components/schemas/Timestamp" }, { type: "null" }]
+        added_by_name: { type: string }
+        created_at: { $ref: "#/components/schemas/Timestamp" }
+        deleted_at:
+          oneOf: [{ $ref: "#/components/schemas/Timestamp" }, { type: "null" }]
+
+    AreaInput:
+      type: object
+      required: [label, shape, x_pct, y_pct, w_pct, h_pct, colour]
+      properties:
+        label: { type: string }
+        shape: { $ref: "#/components/schemas/AreaShape" }
+        x_pct: { $ref: "#/components/schemas/Percent" }
+        y_pct: { $ref: "#/components/schemas/Percent" }
+        w_pct: { $ref: "#/components/schemas/Percent" }
+        h_pct: { $ref: "#/components/schemas/Percent" }
+        colour: { $ref: "#/components/schemas/AreaColour" }
+
+    AreaPatch:
+      type: object
+      minProperties: 1
+      properties:
+        label: { type: string }
+        shape: { $ref: "#/components/schemas/AreaShape" }
+        x_pct: { $ref: "#/components/schemas/Percent" }
+        y_pct: { $ref: "#/components/schemas/Percent" }
+        w_pct: { $ref: "#/components/schemas/Percent" }
+        h_pct: { $ref: "#/components/schemas/Percent" }
+        colour: { $ref: "#/components/schemas/AreaColour" }
+
+    RoomArea:
+      allOf:
+        - $ref: "#/components/schemas/AreaInput"
+        - type: object
+          required: [id, room_id, deleted_at]
+          properties:
+            id: { type: string }
+            room_id: { type: string }
+            deleted_at:
+              oneOf: [{ $ref: "#/components/schemas/Timestamp" }, { type: "null" }]
+
+    FeedEventType:
+      type: string
+      enum: [plant_added, plant_removed, plant_moved, care_done, area_changed, post]
+
+    UndoPayload:
+      oneOf:
+        - type: object
+          required: [kind, room_plant]
+          properties:
+            kind: { const: restore_plant }
+            room_plant: { $ref: "#/components/schemas/RoomPlant" }
+        - type: object
+          required: [kind, room_plant_id]
+          properties:
+            kind: { const: delete_plant }
+            room_plant_id: { type: string }
+        - type: object
+          required: [kind, area, area_id]
+          properties:
+            kind: { const: restore_area }
+            area:
+              oneOf: [{ $ref: "#/components/schemas/RoomArea" }, { type: "null" }]
+              description: Null means the area was created by this event, so undo removes it.
+            area_id: { type: string }
+
+    FeedEvent:
+      type: object
+      required: [id, room_id, type, actor_name, device_id, room_plant_id, text, photo_url,
+                 undo_payload, undone_at, created_at]
+      properties:
+        id: { type: string }
+        room_id: { type: string }
+        type: { $ref: "#/components/schemas/FeedEventType" }
+        actor_name: { type: string }
+        device_id: { type: string }
+        room_plant_id: { type: [string, "null"] }
+        text:
+          type: string
+          description: |
+            For system events, a sentence fragment shown after the actor's name, for example
+            `added a Tomato` or `renamed "Veg bed" to "Herbs"`. For posts, the user's text.
+        photo_url: { type: [string, "null"] }
+        undo_payload:
+          oneOf: [{ $ref: "#/components/schemas/UndoPayload" }, { type: "null" }]
+        undone_at:
+          oneOf: [{ $ref: "#/components/schemas/Timestamp" }, { type: "null" }]
+        created_at: { $ref: "#/components/schemas/Timestamp" }
+
+    RoomFollow:
+      type: object
+      required: [id, room_id, email, unsubscribe_token, created_at]
+      properties:
+        id: { type: string }
+        room_id: { type: string }
+        email: { type: string, format: email }
+        unsubscribe_token: { type: string }
+        created_at: { $ref: "#/components/schemas/Timestamp" }
+
+    RoomSummary:
+      type: object
+      required: [room, plants, areas]
+      description: Just enough data to draw a room's thumbnail on the index page.
+      properties:
+        room: { $ref: "#/components/schemas/Room" }
+        plants:
+          type: array
+          items:
+            type: object
+            required: [x_pct, y_pct, category]
+            properties:
+              x_pct: { $ref: "#/components/schemas/Percent" }
+              y_pct: { $ref: "#/components/schemas/Percent" }
+              category: { $ref: "#/components/schemas/PlantCategory" }
+        areas:
+          type: array
+          items: { $ref: "#/components/schemas/RoomArea" }
+
+    RoomState:
+      type: object
+      required: [room, plants, areas, feed]
+      properties:
+        room: { $ref: "#/components/schemas/Room" }
+        plants:
+          type: array
+          items: { $ref: "#/components/schemas/RoomPlant" }
+        areas:
+          type: array
+          items: { $ref: "#/components/schemas/RoomArea" }
+        feed:
+          type: array
+          description: Newest first.
+          items: { $ref: "#/components/schemas/FeedEvent" }
+
+    IdentifyCandidate:
+      type: object
+      required: [plant, confidence]
+      properties:
+        plant: { $ref: "#/components/schemas/Plant" }
+        confidence: { type: number, minimum: 0, maximum: 1 }
