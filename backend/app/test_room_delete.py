@@ -33,18 +33,18 @@ def api(store):
 
 
 def make_area(room_id, **overrides) -> RoomArea:
-    fields = dict(
-        id="area-gone",
-        room_id=room_id,
-        label="Old bed",
-        shape="rect",
-        x_pct=10,
-        y_pct=10,
-        w_pct=20,
-        h_pct=20,
-        colour="soil",
-        deleted_at=timestamps.now(),
-    )
+    fields = {
+        "id": "area-gone",
+        "room_id": room_id,
+        "label": "Old bed",
+        "shape": "rect",
+        "x_pct": 10,
+        "y_pct": 10,
+        "w_pct": 20,
+        "h_pct": 20,
+        "colour": "soil",
+        "deleted_at": timestamps.now(),
+    }
     return RoomArea(**{**fields, **overrides})
 
 
