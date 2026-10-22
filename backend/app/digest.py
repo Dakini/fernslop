@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 from typing import Protocol
 
 from app import timestamps
-from app.store import StoreProtocol
+from app.store import StoreProtocol, get_store
 
 logger = logging.getLogger(__name__)
 
@@ -121,10 +121,8 @@ def run(store: StoreProtocol, sender: EmailSender, now: datetime) -> SendReport:
 
 def main() -> int:
     """Run the job. Exits non-zero if any send failed, so the scheduler notices."""
-    from app.store import store
-
     logging.basicConfig(level=logging.INFO)
-    report = run(store, ConsoleSender(), timestamps.now())
+    report = run(get_store(), ConsoleSender(), timestamps.now())
     print(f"Digests sent: {report.sent}, failed: {report.failed}")
     return 1 if report.failed else 0
 

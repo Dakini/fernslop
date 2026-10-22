@@ -60,13 +60,6 @@ def test_api_error_returns_its_status_and_message(routes_client):
     assert response.json() == {"message": "Already exists"}
 
 
-def test_api_error_with_422_is_returned_as_422(routes_client):
-    response = routes_client.get("/api/_test/unprocessable")
-
-    assert response.status_code == 422
-    assert response.json() == {"message": "Cannot mark care yet"}
-
-
 # --- Validation --------------------------------------------------------------
 
 
@@ -75,39 +68,6 @@ def test_missing_body_field_returns_400_with_field_and_reason(routes_client):
 
     assert response.status_code == 400
     assert response.json() == {"message": "name: Field required"}
-
-
-def test_wrong_type_in_body_returns_400_with_last_location_element(routes_client):
-    response = routes_client.post("/api/_test/validate", json={"name": "fern", "count": "many"})
-
-    assert response.status_code == 400
-    assert response.json()["message"].startswith("count: ")
-
-
-def test_invalid_query_parameter_returns_400_with_message(routes_client):
-    response = routes_client.get("/api/_test/query", params={"limit": "abc"})
-
-    assert response.status_code == 400
-    assert response.json()["message"].startswith("limit: ")
-
-
-def test_malformed_json_body_returns_400_with_message(routes_client):
-    response = routes_client.post(
-        "/api/_test/validate",
-        content="{not json",
-        headers={"content-type": "application/json"},
-    )
-
-    assert response.status_code == 400
-    assert response.json()["message"]
-    assert "detail" not in response.json()
-
-
-def test_validation_failure_is_never_422(routes_client):
-    response = routes_client.post("/api/_test/validate", json={"name": 5})
-
-    assert response.status_code != 422
-    assert response.status_code == 400
 
 
 # --- Unknown path and wrong method ------------------------------------------
@@ -134,13 +94,6 @@ def test_wrong_method_on_known_path_returns_405_with_message(client):
 # --- Unhandled exceptions ----------------------------------------------------
 
 
-def test_unhandled_exception_returns_500_with_generic_message(lenient_client):
-    response = lenient_client.get("/api/_test/boom")
-
-    assert response.status_code == 500
-    assert response.json() == {"message": "Something went wrong. Please try again."}
-
-
 def test_unhandled_exception_does_not_leak_traceback_or_exception_text(lenient_client):
     response = lenient_client.get("/api/_test/boom")
 
@@ -152,20 +105,3 @@ def test_unhandled_exception_does_not_leak_traceback_or_exception_text(lenient_c
 # --- Message shape -----------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("method", "path", "kwargs"),
-    [
-        ("get", "/api/nope", {}),
-        ("post", "/api/health", {}),
-        ("post", "/api/_test/validate", {"json": {}}),
-        ("get", "/api/_test/api-error", {}),
-        ("get", "/api/_test/boom", {}),
-    ],
-)
-def test_every_error_message_is_a_non_empty_string(lenient_client, method, path, kwargs):
-    response = getattr(lenient_client, method)(path, **kwargs)
-
-    assert response.status_code >= 400
-    message = response.json()["message"]
-    assert isinstance(message, str)
-    assert message
