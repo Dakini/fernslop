@@ -78,3 +78,34 @@ Tests (in `backend/app/test_auth.py`, written per `_docs/testing-guidelines.md` 
 - `backend/app/test_auth.py`: 47 tests on a throwaway `FastAPI()` app (with `register_error_handlers`) covering every happy-path and rejection bullet, both sides of the 40/41 and 64/65 boundaries, 40 emoji accepted, device id winning over a bad name, no `detail` key, dependency running before the route body, an opt-in route working with garbage headers, and a CORS preflight against `create_app()` plus a throwaway actor route.
 - `uv run pytest` in `backend/`: 104 passed, no skips or xfails. No dependency changes.
 - Note: a name that decodes to a control character plus surrounding whitespace only (for example `%0A`) is reported as "required" because trimming removes it first; `%00` and a control character inside the name give "contains invalid characters", as the criteria describe.
+
+### QA: PASS
+
+Checked against the running code with my own throwaway routes on a fresh `FastAPI()` plus `register_error_handlers`, driven through `TestClient` (script in the scratchpad), and a throwaway actor route added to the real `app.main.app` for the preflight.
+
+- [x] `Actor(ApiModel)` with `device_id` and `name`, `get_actor` returns it, docstring kept without "issue 003" - PASS
+- [x] `get_actor` does not use the store and raises only `ApiError` - PASS (read `auth.py`; every rejection returned a `{"message": ...}` body)
+- [x] Opt-in per route: a route without the dependency returned 200 with missing, blank and `%FF`/`%00` headers - PASS
+- [x] Happy path `7b1f0c2e-...` / `Anonymous%20Hedgehog` gives `Anonymous Hedgehog` - PASS
+- [x] `Zo%C3%AB%20%F0%9F%8C%BF` gives `Zoë 🌿`; plain ASCII unchanged; `a+b%20c` gives `a+b c` - PASS
+- [x] `%20%20Fern%20` gives `Fern`; device id `"  dev  "` gives `dev`; inner whitespace kept (`Fern%20%20Two`) - PASS
+- [x] Lowercase `x-device-id` / `x-actor-name` work - PASS
+- [x] Non-UUID device id (`pending`) accepted as sent - PASS
+- [x] `X-Device-Id` missing, empty, whitespace gives 400 "X-Device-Id header is required." - PASS
+- [x] `X-Device-Id` 64 chars accepted, 65 gives 400 "X-Device-Id must be at most 64 characters." (64 plus surrounding spaces also accepted) - PASS
+- [x] `X-Actor-Name` missing, empty, `%20%20`, `%09`, spaces give 400 "X-Actor-Name header is required." - PASS
+- [x] `%FF`, `%C3`, `Fern%FF` give 400 "X-Actor-Name is not valid percent-encoded UTF-8."; no 500, no replacement char - PASS
+- [x] `%00`, `a%0Ab`, `a%00` give 400 "X-Actor-Name contains invalid characters." - PASS
+- [x] Name 40 chars accepted, 41 gives 400 "X-Actor-Name must be at most 40 characters."; 40 emoji accepted, 41 rejected; 40 `ë` (80 encoded bytes) accepted; trimmed 40 plus padding accepted, `%20` plus 41 rejected - PASS
+- [x] 120-char encoded limit not enforced separately - PASS (40 emoji encoded to 480 chars were accepted)
+- [x] Both headers bad: device id message wins (65-char id plus `%FF`, and both missing) - PASS
+- [x] Missing actor on a route for a nonexistent room (`/rooms/nope/x`) gives the 400 actor error, not 404 - PASS
+- [x] CORS preflight (`OPTIONS`, allowed origin, no actor headers) to an actor route on the real `app` returns 200; a plain GET to the same route returns 400 - PASS
+- [x] Error bodies come from `errors.py` handlers; `main.py`, `errors.py`, `pyproject.toml`, `uv.lock` are untouched by the 003 commit; no `detail` key in any response I saw - PASS
+- [x] Existing 57 tests still pass (104 total minus the 47 in `test_auth.py`) - PASS
+- [x] `test_auth.py` uses its own throwaway app, covers each bullet and both sides of the boundaries, has the opt-in, device-id-wins and no-`detail` cases, and the preflight test runs against `create_app()` - PASS
+- [x] `uv run pytest` exits 0 with no skips or xfails - PASS
+
+Tests: `uv run pytest` (from `backend/`), 104 passed, 0 failed, 0 skipped. Ran `app/test_auth.py` (47), `test_errors.py`, `test_main.py`, `test_timestamps.py`. The uncommitted `app/models.py` change from issue 002 did not affect the result.
+
+Observation, not a failure: `%0A` on its own (a control character plus whitespace only) returns "X-Actor-Name header is required." because trimming removes it first. The criteria call `%0A` an invalid-characters example, but the same criteria say blank-after-trimming is "required" and `%09` is listed there, so this is consistent with the engineer's note. `%0A` inside a name (`a%0Ab`) gives "invalid characters".
