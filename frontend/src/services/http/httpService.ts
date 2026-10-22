@@ -94,6 +94,12 @@ export function createHttpService(
       }
       return { ...state, feed: state.feed.map(fixEvent) };
     },
+    async deleteRoom(roomId) {
+      const res = await send(`/rooms/${encodeURIComponent(roomId)}`, { method: "DELETE" });
+      if (res.status === 404) return false;
+      if (!res.ok) throw await errorFrom(res);
+      return true;
+    },
 
     listPlants: () => json("/plants"),
     searchPlants: (query) =>

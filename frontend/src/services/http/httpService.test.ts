@@ -107,4 +107,20 @@ describe("http GardenService", () => {
     stop();
     expect(close).toHaveBeenCalled();
   });
+
+  it("deleteRoom sends DELETE without actor headers: true on 204, false on 404, rejects otherwise", async () => {
+    const svc = createHttpService();
+    fetchMock.mockResolvedValueOnce(reply(204));
+    await expect(svc.deleteRoom("room 1")).resolves.toBe(true);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/rooms/room%201");
+    expect(init.method).toBe("DELETE");
+    expect(init.headers).toBeUndefined();
+
+    fetchMock.mockResolvedValueOnce(reply(404, { message: "Room not found" }));
+    await expect(svc.deleteRoom("room1")).resolves.toBe(false);
+
+    fetchMock.mockResolvedValueOnce(reply(500, { message: "Boom" }));
+    await expect(svc.deleteRoom("room1")).rejects.toThrow("Boom");
+  });
 });

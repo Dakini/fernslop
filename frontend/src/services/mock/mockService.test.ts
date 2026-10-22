@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { careStatus } from "../care";
 import { ROOM_LIMITS } from "../types";
 import { createMockService, memoryStorage } from "./mockService";
@@ -44,6 +44,30 @@ describe("rooms", () => {
     expect(list.map((r) => r.room.name)).toEqual(["A", "B"]);
   });
 
+});
+
+describe("deleting a room", () => {
+  it("removes the room with its data, notifies subscribers and reports false the second time", async () => {
+    const { svc } = setup();
+    const room = await svc.createRoom({ name: "Doomed" });
+    const other = await svc.createRoom({ name: "Kept" });
+    await svc.addPlant(room.id, "plant-basil", actor);
+    await svc.addPlant(other.id, "plant-basil", actor);
+    await svc.followRoom(room.id, "a@example.com");
+    const onChange = vi.fn();
+    svc.subscribe(room.id, onChange);
+
+    await expect(svc.deleteRoom(room.id)).resolves.toBe(true);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(await svc.getRoomState(room.id)).toBeNull();
+    const db = svc._db();
+    expect(db.room_plants.map((p) => p.room_id)).toEqual([other.id]);
+    expect(db.feed_events.every((e) => e.room_id === other.id)).toBe(true);
+    expect(db.room_follows).toHaveLength(0);
+    expect((await svc.listRooms()).map((r) => r.room.id)).toEqual([other.id]);
+
+    await expect(svc.deleteRoom(room.id)).resolves.toBe(false);
+  });
 });
 
 describe("plants and care", () => {

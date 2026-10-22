@@ -131,6 +131,8 @@ export interface GardenService {
   listRooms(): Promise<RoomSummary[]>;
   createRoom(input: { name: string; description?: string; region?: string }): Promise<Room>;
   getRoomState(roomId: string): Promise<RoomState | null>;
+  /** Permanently deletes a garden and everything in it. True when deleted, false when it was already gone. */
+  deleteRoom(roomId: string): Promise<boolean>;
 
   listPlants(): Promise<Plant[]>;
   searchPlants(query: string): Promise<Plant[]>;

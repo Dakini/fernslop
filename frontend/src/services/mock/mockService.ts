@@ -300,6 +300,18 @@ export function createMockService(opts: MockOptions = {}): GardenService & { _db
       });
     },
 
+    async deleteRoom(roomId) {
+      if (!db.rooms.some((r) => r.id === roomId)) return wait(false);
+      db.rooms = db.rooms.filter((r) => r.id !== roomId);
+      db.room_plants = db.room_plants.filter((p) => p.room_id !== roomId);
+      db.room_areas = db.room_areas.filter((a) => a.room_id !== roomId);
+      db.feed_events = db.feed_events.filter((e) => e.room_id !== roomId);
+      db.room_follows = db.room_follows.filter((f) => f.room_id !== roomId);
+      storage.save(db);
+      emit(roomId);
+      return wait(true);
+    },
+
     async listPlants() {
       return wait(plants);
     },

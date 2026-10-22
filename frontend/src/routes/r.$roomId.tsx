@@ -1,4 +1,4 @@
-import { createFileRoute, Link, notFound } from "@tanstack/react-router";
+import { createFileRoute, Link, notFound, useNavigate } from "@tanstack/react-router";
 import { useQueryClient, useSuspenseQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -15,6 +15,7 @@ import { AddPlantDialog } from "@/components/garden/AddPlantDialog";
 import { PlantAvatar } from "@/components/garden/PlantAvatar";
 import { CareRing, CARE_ICONS } from "@/components/garden/CareRing";
 import { copyShare } from "@/components/garden/CreateRoomDialog";
+import { DeleteGardenDialog } from "@/components/garden/DeleteGardenDialog";
 import { plantsQuery, roomQuery, useRoomLive } from "@/lib/queries";
 import { saveNickname, useIdentity } from "@/lib/identity";
 import { allCareStatuses, CARE_LABELS, type CareStatus } from "@/services/care";
@@ -65,7 +66,10 @@ function RoomPage() {
   const { data: plants } = useSuspenseQuery(plantsQuery());
   const qc = useQueryClient();
   const actor = useIdentity();
-  const online = useRoomLive(roomId);
+  const navigate = useNavigate();
+  // True from the moment this visitor confirms a delete, so the live "room is gone" update never shows them the deleted page.
+  const [deleting, setDeleting] = useState(false);
+  const online = useRoomLive(roomId, !!state);
   const svc = getServices();
 
   const [openPlantId, setOpenPlantId] = useState<string | null>(null);
@@ -75,8 +79,15 @@ function RoomPage() {
   const plantMap = useMemo(() => new Map(plants.map((p) => [p.id, p])), [plants]);
   const now = new Date();
 
-  if (!state) return null;
+  if (!state) return deleting ? null : <GardenDeleted />;
   const { room } = state;
+
+  async function afterDelete() {
+    qc.removeQueries({ queryKey: ["rooms"] });
+    await navigate({ to: "/" });
+    qc.removeQueries({ queryKey: ["room", roomId] });
+    toast.success("Garden deleted");
+  }
 
   const run = async (fn: () => Promise<unknown>, ok?: string) => {
     try {
@@ -121,6 +132,7 @@ function RoomPage() {
           <NicknameChip name={actor.name} />
           <FollowButton roomId={room.id} />
           <Button variant="secondary" onClick={() => copyShare(room.id)}><Share2 /> Share</Button>
+          <DeleteGardenDialog roomId={room.id} roomName={room.name} onPendingChange={setDeleting} onDeleted={() => void afterDelete()} />
         </div>
       </header>
 
@@ -218,6 +230,16 @@ function RoomPage() {
         </SheetContent>
       </Sheet>
     </main>
+  );
+}
+
+/** Shown to a visitor whose open garden was deleted by someone else. */
+export function GardenDeleted() {
+  return (
+    <div className="p-10 text-center">
+      <h1 className="text-2xl">This garden was deleted</h1>
+      <Link to="/" className="mt-4 inline-block underline">All gardens</Link>
+    </div>
   );
 }
 
