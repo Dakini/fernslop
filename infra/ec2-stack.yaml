@@ -81,6 +81,10 @@ Resources:
       SubnetId: !Ref SubnetId
       SecurityGroupIds: [!Ref SecurityGroup]
       IamInstanceProfile: !Ref InstanceProfile
+      MetadataOptions:
+        # IMDSv2 only, and one hop: containers (an extra network hop away) cannot read the instance role's credentials
+        HttpTokens: required
+        HttpPutResponseHopLimit: 1
       BlockDeviceMappings:
         - DeviceName: /dev/xvda
           Ebs: { VolumeSize: 20, VolumeType: gp3, Encrypted: true }
