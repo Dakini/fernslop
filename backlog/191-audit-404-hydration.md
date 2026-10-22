@@ -37,3 +37,15 @@ Checked on the production static build: first `FERNSLOP_STATIC=1 npm run build` 
 Test: `e2e/test_not_found.py` (one test, listed in `e2e/README.md`). It loads `/nope`, checks the heading and the "Go home" link, and asserts no console or page error. It did not use the #190 helpers (`create_garden`, `image_has_loaded`), because it creates no garden and loads no image. It only uses the shared `new_gardener` fixture.
 
 Tests: e2e 3 passed (run against my own `fernslop-e2e191` compose stack via `E2E_BASE_URL`, so it would not clash with other agents using the fixed `fernslop-e2e` project); `cd frontend && npm test` 41 passed. `tsc` and `eslint` report no new problems in `__root.tsx`. Both still report existing errors in other files and existing prettier issues, the same as on `main`.
+
+## QA: PASS
+
+Checked on the production static build (`FERNSLOP_STATIC=1 npm run build`, served by the backend on :8391 with a scratch SQLite DB), Chromium via Playwright at 1280x800 and 390x844, listening for console errors and page errors.
+
+- [x] `/nope` and `/a/b/c` loaded directly show "Page not found" with no #418 or other console/page error; "Go home" goes to `/` in the same document - PASS
+- [x] `/r/<random UUID>` and `/r/not-a-uuid` show "This garden can't be found" with no hydration error (only Chromium's network log line for the API's 404 response) - PASS
+- [x] `/unsubscribe` shows "This link looks incomplete" and `/unsubscribe?token=x` shows "Already unsubscribed", no errors - PASS
+- [x] `/` and `/r/<Elm Street Allotment id>` hydrate with no errors; navigating in-app to an unknown path (Back after "Go home", and a router-handled pushState to `/zzz-unknown`) shows the 404 in the same document with no errors - PASS
+- [x] `e2e/test_not_found.py` loads `/nope`, checks the 404 heading and asserts no console/page error - PASS
+
+Tests: `cd frontend && npm test`, 41 passed, 0 failed; `cd e2e && E2E_BASE_URL=http://localhost:8391 uv run pytest`, 3 passed, 0 failed
