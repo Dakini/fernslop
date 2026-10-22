@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useSuspenseQuery } from "@tanstack/react-query";
+import { useSuspenseInfiniteQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Plus, Search, Sprout } from "lucide-react";
 import emptyArt from "@/assets/empty-seedling.png";
@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { CanvasThumbnail } from "@/components/garden/CanvasThumbnail";
 import { CreateRoomDialog } from "@/components/garden/CreateRoomDialog";
 import { roomsQuery } from "@/lib/queries";
+import type { RoomPage, RoomSummary } from "@/services/types";
 
 export const Route = createFileRoute("/")({
   ssr: false,
@@ -21,14 +22,21 @@ export const Route = createFileRoute("/")({
       { name: "twitter:card", content: "summary_large_image" },
     ],
   }),
-  loader: ({ context }) => context.queryClient.ensureQueryData(roomsQuery()),
+  loader: ({ context }) => context.queryClient.ensureInfiniteQueryData(roomsQuery()),
   component: Index,
 });
 
+/** All loaded pages in order; a room that moved to an earlier page between fetches is shown once. */
+function loadedRooms(pages: RoomPage[]): RoomSummary[] {
+  const seen = new Set<string>();
+  return pages.flatMap((p) => p.rooms).filter((s) => !seen.has(s.room.id) && seen.add(s.room.id));
+}
+
 function Index() {
-  const { data } = useSuspenseQuery(roomsQuery());
+  const { data, hasNextPage, fetchNextPage, isFetchingNextPage } = useSuspenseInfiniteQuery(roomsQuery());
   const [q, setQ] = useState("");
-  const rooms = data.filter((r) => r.room.name.toLowerCase().includes(q.trim().toLowerCase()));
+  const all = loadedRooms(data.pages);
+  const rooms = all.filter((r) => r.room.name.toLowerCase().includes(q.trim().toLowerCase()));
 
   return (
     <main className="mx-auto max-w-6xl px-4 py-8 md:py-14">
@@ -49,7 +57,7 @@ function Index() {
         <Input id="room-search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search gardens" className="rounded-full bg-oat pl-10" />
       </div>
 
-      {data.length === 0 ? (
+      {all.length === 0 ? (
         <div className="mt-12 flex flex-col items-center text-center">
           <img src={emptyArt} alt="" width={1024} height={1024} className="h-40 w-40" />
           <h2 className="text-2xl">No gardens yet</h2>
@@ -70,6 +78,14 @@ function Index() {
           ))}
           {!rooms.length && <li className="text-muted-foreground">No gardens match “{q}”.</li>}
         </ul>
+      )}
+
+      {hasNextPage && (
+        <div className="mt-8 flex justify-center">
+          <Button variant="soft" size="lg" onClick={() => fetchNextPage()} disabled={isFetchingNextPage}>
+            {isFetchingNextPage ? "Loading gardens…" : "Show more gardens"}
+          </Button>
+        </div>
       )}
     </main>
   );

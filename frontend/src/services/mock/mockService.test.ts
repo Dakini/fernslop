@@ -40,8 +40,24 @@ describe("rooms", () => {
     await svc.createRoom({ name: "B" });
     advance(1);
     await svc.addPlant(a.id, "plant-basil", actor);
-    const list = await svc.listRooms();
+    const list = (await svc.listRooms()).rooms;
     expect(list.map((r) => r.room.name)).toEqual(["A", "B"]);
+  });
+
+  it("pages rooms like the server, ending with next: null", async () => {
+    const { svc, advance } = setup();
+    for (const name of ["A", "B", "C"]) {
+      await svc.createRoom({ name });
+      advance(1);
+    }
+
+    const first = await svc.listRooms({ limit: 2 });
+    const second = await svc.listRooms({ limit: 2, before: first.next });
+
+    expect(first.rooms.map((r) => r.room.name)).toEqual(["C", "B"]);
+    expect(second.rooms.map((r) => r.room.name)).toEqual(["A"]);
+    expect(second.next).toBeNull();
+    await expect(svc.listRooms({ limit: 101 })).rejects.toThrow();
   });
 
 });
@@ -64,11 +80,11 @@ describe("deleting a room", () => {
     expect(db.room_plants.map((p) => p.room_id)).toEqual([other.id]);
     expect(db.feed_events.every((e) => e.room_id === other.id)).toBe(true);
     expect(db.room_follows).toHaveLength(0);
-    expect((await svc.listRooms()).map((r) => r.room.id)).toEqual([other.id]);
+    expect((await svc.listRooms()).rooms.map((r) => r.room.id)).toEqual([other.id]);
 
     await expect(svc.deleteRoom(room.id)).resolves.toBe(true); // second delete: no error, no change
     expect(onChange).toHaveBeenCalledTimes(1);
-    expect((await svc.listRooms()).map((r) => r.room.id)).toEqual([other.id]);
+    expect((await svc.listRooms()).rooms.map((r) => r.room.id)).toEqual([other.id]);
   });
 });
 
@@ -277,7 +293,7 @@ describe("identify, follow, realtime", () => {
 
   it("seeds two demo gardens on first run", async () => {
     const svc = createMockService({ storage: memoryStorage() });
-    expect((await svc.listRooms()).length).toBe(2);
+    expect((await svc.listRooms()).rooms.length).toBe(2);
   });
 
   it("seeds about 50 plants", () => {
