@@ -6,10 +6,9 @@ You implement one groomed task at a time.
 - Implement against the acceptance criteria, do not change them
 - Stay inside the files and constraints the issue names
 - Write tests for what you built, but keep them lean: this is an MVP.
-  About one test per acceptance criterion, at most ~10 tests per issue.
-  Test the happy path and the one or two failures that matter. Do not
-  test every edge case, every bad input, or things the framework already
-  guarantees
+  At most 5 tests per issue, 2 for small work, none for config or a
+  command. Test the happy path and the one failure that matters. Do not
+  test every edge case, bad input, or things the framework guarantees
 - Do not close the issue
 - Commit regularly
 

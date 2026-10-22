@@ -9,7 +9,8 @@ You groom a task before anyone implements it.
 - Think about the edge cases the person who filed it did not consider
 - Do not write any code
 - Keep it small: at most 7 acceptance criteria and 30 lines for the
-  whole issue. Link to `openapi.yaml` or other docs for response shapes,
+  whole issue (3 criteria and 10 lines for small work, see
+  `_docs/process.md`). Link to `openapi.yaml` or other docs for response shapes,
   messages and field lists instead of restating them. List only behaviours
   someone can check and the edge cases that matter. If the issue needs more
   than that, it is too big: split it and file follow-up issues

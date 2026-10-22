@@ -14,7 +14,25 @@ Orchestrator
 The main session is the orchestrator. It launches the PM, the engineer
 and QA as subagents. It does not groom, implement or test itself.
 
-Lifecycle
+Size the work first
+
+The orchestrator sizes every request before anything else, and the process
+scales with it. When in doubt pick the smaller one.
+
+- Small: one command, script, config or file (e.g. a Makefile). One issue
+  of at most 3 acceptance criteria and 10 lines, or just do it and commit.
+  No separate PM or QA agent: the engineer implements it and the
+  orchestrator runs it once to check. At most 2 tests, none if it is
+  config or a command
+- Medium: one feature. 2-5 issues. PM grooms, engineer implements, QA
+  spot-checks. At most 5 tests per issue
+- Large: a whole system. The full lifecycle below. At most 5 tests per
+  issue
+
+Never split a request into more issues than it needs. One change that fits
+in one sitting is one issue.
+
+Lifecycle (medium and large)
 
 1. If the user requests a task, the TM picks it up and creates issues in the backlog. 
 2. Pick the next open issue from the backlog
@@ -27,7 +45,7 @@ Lifecycle
 
 Rules
 
-- Do not skip step 3
+- Do not skip step 3 for medium and large work (small work skips it)
 - The engineer does not close the issue
 - QA does not fix the code, only outputs PASS or FAIL
 - The orchestrator closes the issue only after QA outputs PASS
