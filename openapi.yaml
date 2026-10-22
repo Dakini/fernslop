@@ -34,6 +34,15 @@ info:
     so the action can be undone. Rows with `deleted_at` set are never returned by
     the read endpoints.
 
+    ## Room identity and limits
+    Rooms are identified by a server-generated UUID (`Room.id`), which is also the
+    public URL segment (`/r/{roomId}`). Rooms have no slugs, so two rooms can have the
+    same name without clashing.
+
+    A room may hold at most **50 live plants** and **10 live areas**. Soft-deleted rows
+    don't count. The server must enforce these limits on create and on any undo that
+    would bring a removed plant or area back. Exceeding a limit returns `409`.
+
     ## Room activity
     Every successful room mutation (except following a room) updates the room's
     `last_activity_at` and pushes a `change` message to that room's live-update stream.
@@ -52,6 +61,7 @@ tags:
   - name: Areas
     description: Labelled areas (beds, ponds) on a room's canvas
   - name: Feed
+  - name: Photos
   - name: Follows
   - name: Realtime
 
@@ -77,10 +87,8 @@ paths:
       x-service-method: createRoom
       summary: Create a room
       description: |
-        Trims all fields. The server derives `slug` from `name`: lowercase, NFKD-normalised,
-        runs of non-`[a-z0-9]` replaced by `-`, leading and trailing `-` stripped, at most
-        40 characters, and `garden` if nothing is left. If the slug is taken, it appends
-        `-2`, `-3`, and so on. This endpoint does not require an actor and writes no feed event.
+        Trims all fields and assigns a new UUID as `id`. This endpoint does not require an
+        actor and writes no feed event.
       requestBody:
         required: true
         content:
@@ -95,7 +103,7 @@ paths:
         "400":
           $ref: "#/components/responses/BadRequest"
 
-  /rooms/by-slug/{slug}:
+  /rooms/{roomId}:
     get:
       tags: [Rooms]
       operationId: getRoomState
@@ -105,11 +113,7 @@ paths:
         Returns live (not soft-deleted) plants and areas, plus the full feed, newest first.
         The feed includes events that were undone; their `undone_at` is set.
       parameters:
-        - name: slug
-          in: path
-          required: true
-          schema: { type: string }
-          example: elm-street-allotment
+        - $ref: "#/components/parameters/RoomId"
       responses:
         "200":
           description: Room state
@@ -117,7 +121,7 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/RoomState" }
         "404":
-          description: No room with this slug. The frontend shows its "garden not found" page.
+          description: No room with this id. The frontend shows its "garden not found" page.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -245,7 +249,7 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          description: The room already has 50 live plants.
+          description: The room already has 50 live plants. Message is `This garden is full (50 plants max)`.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -363,7 +367,7 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          description: The room already has 10 live areas.
+          description: The room already has 10 live areas. Message is `This garden has the maximum 10 areas`.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -420,12 +424,9 @@ paths:
       summary: Post a message and/or photo to the room feed
       description: |
         Creates a `post` feed event with no undo payload. `text` is trimmed and at least one of
-        `text` and `photo_url` must be non-empty.
-
-        **Note:** the current UI sends the photo as a `data:image/...;base64,` URL
-        (from FileReader, original file at most 5 MB, so up to about 7 MB of text). The product spec says photos
-        should go to object storage instead. Until an upload endpoint exists, the server must
-        accept data URLs here.
+        `text` and `photo_id` must be non-empty. The photo must already be uploaded with
+        `POST /photos`. The server copies that photo's `url` into the event's `photo_url`,
+        so clients can't put arbitrary URLs in the feed.
       security: [{ actor: [] }]
       parameters:
         - $ref: "#/components/parameters/RoomId"
@@ -436,12 +437,13 @@ paths:
           application/json:
             schema:
               type: object
-              required: [text, photo_url]
+              required: [text, photo_id]
               properties:
                 text: { type: string }
-                photo_url:
+                photo_id:
                   type: [string, "null"]
-                  description: An http(s) URL or a `data:` URL.
+                  format: uuid
+                  description: The `id` returned by `POST /photos`.
       responses:
         "201":
           description: Feed event created
@@ -449,12 +451,85 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/FeedEvent" }
         "400":
-          description: Both text and photo are empty. Message is `Write something or add a photo`.
+          description: |
+            Both text and photo are empty (message `Write something or add a photo`), or
+            `photo_id` doesn't match an uploaded photo (message `That photo didn't upload — try again`).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "404":
           $ref: "#/components/responses/NotFound"
+
+  /photos:
+    post:
+      tags: [Photos]
+      operationId: uploadPhoto
+      x-service-method: uploadPhoto
+      summary: Upload a photo to attach to a post
+      description: |
+        Stores the image and returns its id and a URL to display it. The frontend uploads
+        as soon as the user picks a file, shows a preview from `url`, then sends `id` as
+        `photo_id` when posting. The mock stores the image in browser storage and
+        returns a `data:` URL. A real backend should return `/api/photos/{id}` or an
+        object-storage URL. Photos that are never posted can be cleaned up later.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: JPEG, PNG or WebP, at most 5 MB (5 × 1024 × 1024 bytes).
+            encoding:
+              file:
+                contentType: image/jpeg, image/png, image/webp
+      responses:
+        "201":
+          description: Stored
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Photo" }
+        "413":
+          description: File is over 5 MB. Message is `That photo is over 5 MB`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "415":
+          description: File is not JPEG, PNG or WebP. Message is `Please use a JPG, PNG or WebP image`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
+  /photos/{photoId}:
+    get:
+      tags: [Photos]
+      operationId: getPhoto
+      summary: Serve an uploaded photo
+      description: |
+        The image bytes with their original content type. The frontend only uses this
+        through `Photo.url` and `FeedEvent.photo_url`, never by building the path itself.
+        Photo ids are unguessable UUIDs, so responses can be cached publicly and indefinitely.
+      parameters:
+        - name: photoId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Image
+          content:
+            image/jpeg: { schema: { type: string, format: binary } }
+            image/png: { schema: { type: string, format: binary } }
+            image/webp: { schema: { type: string, format: binary } }
+        "404":
+          description: No such photo.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   /feed-events/{eventId}/undo:
     post:
@@ -486,8 +561,10 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "409":
           description: |
-            The event has no undo payload (message `This can't be undone`) or has already
-            been undone (message `Already undone`).
+            The event has no undo payload (message `This can't be undone`), has already
+            been undone (message `Already undone`), or would bring back a plant or area into
+            a room that is at its limit (the same messages as `addPlant` and `addArea`).
+            Nothing changes and `undone_at` stays null.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -503,9 +580,9 @@ paths:
         the same email returns the existing follow. A weekly digest is sent only if the room
         had activity that week; that is a scheduled job, not an endpoint.
 
-        **Security note:** the frontend type expects `unsubscribe_token` in this response, but
-        the UI never reads it. Returning it lets anyone unsubscribe any address they know.
-        Consider leaving it out and sending it only by email.
+        The response **must not** include the unsubscribe token. The server keeps it and
+        sends it only inside digest emails. Otherwise anyone could unsubscribe any
+        address they know.
       parameters:
         - $ref: "#/components/parameters/RoomId"
       requestBody:
@@ -543,8 +620,9 @@ paths:
       x-service-method: unfollow
       summary: Unsubscribe using the token from a digest email
       description: |
-        Idempotent. Returns `unsubscribed: false` if the token matched nothing. No UI route
-        calls this yet; the one-click link in digest emails will.
+        Idempotent. Returns `unsubscribed: false` if the token matched nothing. The token is
+        only ever sent in digest emails. No UI route calls this yet; the one-click link in
+        those emails will.
       security: [{ unsubscribeToken: [] }]
       requestBody:
         required: true
@@ -575,7 +653,7 @@ paths:
       description: |
         A long-lived `text/event-stream`. The server sends `event: change` with `data: <roomId>`
         after any mutation in the room, including mutations by other clients. The frontend
-        doesn't need a diff. On each message it refetches `GET /rooms/by-slug/{slug}` and
+        doesn't need a diff. On each message it refetches `GET /rooms/{roomId}` and
         `GET /rooms`. Send a comment line (`: ping`) every 25 s or so to keep the connection
         open. Clients reconnect with EventSource's built-in retry.
       parameters:
@@ -616,7 +694,7 @@ components:
       name: roomId
       in: path
       required: true
-      schema: { type: string }
+      schema: { type: string, format: uuid }
     RoomPlantId:
       name: roomPlantId
       in: path
@@ -719,10 +797,12 @@ components:
 
     Room:
       type: object
-      required: [id, slug, name, description, region, created_at, last_activity_at]
+      required: [id, name, description, region, created_at, last_activity_at]
       properties:
-        id: { type: string }
-        slug: { type: string, description: "Unique; used in the URL `/r/{slug}`" }
+        id:
+          type: string
+          format: uuid
+          description: "Server-generated; also the room's URL segment (`/r/{id}`)."
         name: { type: string }
         description: { type: string, description: Empty string when not set }
         region: { type: string, description: Empty string when not set }
@@ -850,13 +930,23 @@ components:
 
     RoomFollow:
       type: object
-      required: [id, room_id, email, unsubscribe_token, created_at]
+      description: The public view of a follow. The unsubscribe token is deliberately left out.
+      required: [id, room_id, email, created_at]
+      additionalProperties: false
       properties:
         id: { type: string }
-        room_id: { type: string }
+        room_id: { type: string, format: uuid }
         email: { type: string, format: email }
-        unsubscribe_token: { type: string }
         created_at: { $ref: "#/components/schemas/Timestamp" }
+
+    Photo:
+      type: object
+      required: [id, url]
+      properties:
+        id: { type: string, format: uuid }
+        url:
+          type: string
+          description: Where to load the image from. The mock returns a `data:` URL.
 
     RoomSummary:
       type: object
