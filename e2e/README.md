@@ -21,3 +21,4 @@ If Chromium is missing, run `uv run playwright install chromium` once.
 ## Tests
 
 - `test_shared_garden.py`: one gardener creates a garden, adds two plants and shares the link; a second gardener (separate browser context, so a separate identity) joins, moves a plant, and the first sees it move without reloading.
+- `test_post_photo.py`: one gardener posts text with a JPEG; the preview shows, the post's image loads from `/api/photos/{id}`, and a second gardener sees the photo arrive in the feed without reloading.

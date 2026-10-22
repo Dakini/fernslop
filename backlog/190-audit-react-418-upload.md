@@ -23,3 +23,16 @@ Verify commit `b32a780` (made outside the process): direct loads of `/` and `/r/
 
 - Code changes only in `e2e/` (see `e2e/README.md`); if another criterion fails, comment on the issue rather than widen it.
 - At most 1 new test; follow `_docs/testing-guidelines.md`.
+
+## Comments
+
+**Engineer:** Verified on a throwaway compose stack (`fernslop-e2e`, port 8123; the stack on :8000 was not touched) with a Playwright script in Chromium at 1280×800 and 390×844.
+
+- Criterion 1: pass. `router.tsx` sets `defaultPendingComponent: PagePending`; no route sets `pendingComponent`.
+- Criterion 2: pass. Direct loads of `/` and `/r/<Elm Street Allotment id>` render their heading with no #418, hydration error or any other console error at both sizes.
+- Criterion 3: pass. Same JPEG chosen twice: two `POST /api/plants/identify`, candidates shown both times, at both sizes.
+- Criterion 4: pass. JPEG, PNG and WebP posts each show the preview, add the post, the image loads (`naturalWidth > 0`) from `/api/photos/{id}`, and a second context sees it without reloading, at both sizes.
+- Criterion 5: partly. The messages are right everywhere: over 5 MB gives `That photo is over 5 MB`; GIF, HEIC, HEIC renamed to `.jpg` and GIF renamed to `.jpg` give `Please use a JPG, PNG or WebP image`; no spinner or "Uploading…" is left behind. Two gaps against the wording: (a) for identify the message is the inline status note at the top of the Add plant dialog, not a toast (the post photo does use a toast); (b) the checks are server-only, so Chromium logs `Failed to load resource: ... 413 (Content Too Large)` / `415 (Unsupported Media Type)` as a console error for each rejected file. The app itself logs nothing. Neither is a broken upload, so filed as [#211](211-audit-photo-reject-in-browser.md) rather than fixed here (code changes are limited to `e2e/`).
+- Criterion 6: added `e2e/test_post_photo.py` (one test, listed in `e2e/README.md`): a gardener posts text plus a JPEG and a second browser context sees the photo load in its feed live.
+
+Tests: `make test-e2e` 2 passed (own throwaway stack, removed afterwards); `cd backend && uv run pytest` 134 passed, 2 skipped.
