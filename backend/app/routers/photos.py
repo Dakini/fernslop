@@ -1,5 +1,6 @@
 """Photo upload and serving. Photos are kept through the store and are not tied to a room."""
 
+import os
 import uuid
 from typing import Annotated
 
@@ -14,6 +15,9 @@ from app.uploads import read_image_upload, strip_metadata
 router = APIRouter(tags=["Photos"])
 
 PHOTO_NOT_FOUND_MESSAGE = "Photo not found"
+STORAGE_FULL_MESSAGE = "Photo storage is full right now. Please try again later."
+STORAGE_LIMIT_ENV = "FERNSLOP_PHOTO_STORAGE_LIMIT_BYTES"
+DEFAULT_STORAGE_LIMIT = 4 * 1024**3
 CACHE_CONTROL = "public, max-age=31536000, immutable"
 # Served as the stored type only, shown in place rather than downloaded.
 PHOTO_HEADERS = {"Cache-Control": CACHE_CONTROL, "X-Content-Type-Options": "nosniff", "Content-Disposition": "inline"}
@@ -29,6 +33,8 @@ def _is_uuid(value: str) -> bool:
 
 @router.post("/photos", operation_id="uploadPhoto", status_code=201)
 def upload_photo(file: UploadFile, store: Annotated[StoreProtocol, Depends(get_store)]) -> Photo:
+    if store.photo_storage_bytes() >= int(os.environ.get(STORAGE_LIMIT_ENV) or DEFAULT_STORAGE_LIMIT):
+        raise ApiError(507, STORAGE_FULL_MESSAGE)
     image = read_image_upload(file)
     data = strip_metadata(image)
     photo_id = str(uuid.uuid4())
