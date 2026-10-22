@@ -40,5 +40,9 @@ EXPOSE 8000
 # or Postgres (the psycopg driver is installed):
 #   -e FERNSLOP_DATABASE_URL=postgresql+psycopg://user:pw@host/db
 # /data is writable by the app user so a named volume mounted there works for SQLite.
-# One worker: the live SSE feed is in-process (see backlog/parked/090-api-live-multi-worker.md).
-CMD ["sh", "-c", "[ -n \"$FERNSLOP_DATABASE_URL\" ] || { echo 'FERNSLOP_DATABASE_URL is not set' >&2; exit 1; }; exec uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+# One worker: the live SSE feed and the rate limits are in-process (see backlog/parked/090-api-live-multi-worker.md).
+# --proxy-headers takes the client IP from X-Forwarded-For, but only from a peer listed in FORWARDED_ALLOW_IPS
+# (comma-separated). Behind a reverse proxy set it to the proxy's fixed address; the default trusts nothing
+# outside the container, so a client-sent X-Forwarded-For is ignored. Limits: see app/rate_limit.py.
+ENV FORWARDED_ALLOW_IPS=127.0.0.1
+CMD ["sh", "-c", "[ -n \"$FERNSLOP_DATABASE_URL\" ] || { echo 'FERNSLOP_DATABASE_URL is not set' >&2; exit 1; }; exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips \"$FORWARDED_ALLOW_IPS\""]
