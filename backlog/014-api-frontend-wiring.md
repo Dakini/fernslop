@@ -35,3 +35,15 @@ An HTTP implementation of `GardenService` (`frontend/src/services/types.ts`) tal
 - 5 tests in `src/services/http/httpService.test.ts` (selection, request shape and actor headers, result mapping, errors, SSE). `npm test`: 30 passed. `npm run build` passes.
 - Lint: `eslint` is clean on the files I touched, but `npm run lint` over the whole repo already fails with ~980 prettier errors in untouched files (e.g. `types.ts`, `start.ts`); I did not reformat them.
 - Manual check, done with curl, not a browser: backend on :8000 plus `VITE_USE_MOCK=false vite dev`; through the Vite proxy I created a room, added a plant with a percent-encoded `Zoë 🌿` header (stored as `Zoë 🌿`), and the `/live` stream sent `event: change` for that room. I did not click through the UI in two tabs.
+
+### QA: PASS
+
+- [x] No env gives the mock; `VITE_USE_MOCK=false` selects HTTP with `VITE_API_BASE_URL` (default `/api`, trailing slash stripped); both documented in `frontend/README.md` - PASS
+- [x] Every method maps to its `x-service-method` operation (path, verb, JSON/multipart); `searchPlants` encodes `q` - PASS (read against `openapi.yaml`)
+- [x] Actor methods send `X-Device-Id` and percent-encoded `X-Actor-Name`; actor-less methods send neither - PASS (`Zoë 🌿` stored correctly via the proxy)
+- [x] 204 -> `void`, `getRoomState` 404 -> `null` (confirmed 404 via proxy), `unfollow` -> boolean, relative photo URLs get the base origin prefix (no `/api/api`) - PASS
+- [x] Non-2xx rejects with the body `message`; network failure / non-JSON gives a generic message - PASS
+- [x] `subscribe` opens `EventSource` on `{base}/rooms/{id}/live`, `onChange` only on `change`, returned fn closes it - PASS (live stream through the Vite proxy sent `: ping` then `event: change` after adding a plant)
+- [x] Vitest tests, lint, build, manual flow - PASS. Create room + add plant through the Vite proxy with `VITE_USE_MOCK=false` worked and the SSE stream emitted a change event (curl, not a browser; accepted). Lint: eslint is clean on all files 014 added/changed. `npm run lint` fails repo-wide (about 950 prettier errors), but the per-file error list is identical at the parent commit 2f2ca31~1 (checked in a temporary worktree, since removed), so the failures pre-date 014 and are not counted against it.
+
+Tests: `npm test` (vitest), 30 passed, 0 failed. `npm run build`: succeeded.
