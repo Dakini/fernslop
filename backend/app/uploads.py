@@ -116,8 +116,10 @@ def _reencode(img: Image.Image, fmt: str, lossless: bool) -> bytes:
     if fmt != "JPEG" and getattr(img, "is_animated", False):
         frames, durations = [], []
         for frame in ImageSequence.Iterator(img):
-            durations.append(frame.info.get("duration", 0))
-            frames.append(_bare(frame.copy()))
+            # Copy before reading the duration: a WebP frame's info is only filled in when it loads.
+            copy = frame.copy()
+            durations.append(copy.info.get("duration", 0))
+            frames.append(_bare(copy))
         first = frames[0]
         params.update(save_all=True, append_images=frames[1:], duration=durations, loop=img.info.get("loop", 0))
     else:
@@ -184,14 +186,19 @@ def _png_has_metadata(data: bytes) -> bool:
     return True
 
 
-def _webp_chunks(data: bytes) -> list[bytes]:
-    """The top-level RIFF chunk types."""
-    kinds, i = [], 12
+def _webp_chunks(data: bytes, start: int = 12) -> list[bytes]:
+    """The RIFF chunk types from ``start`` on (the top-level chunks by default)."""
+    return [kind for kind, _ in _webp_chunk_spans(data, start)]
+
+
+def _webp_chunk_spans(data: bytes, start: int = 12) -> list[tuple[bytes, bytes]]:
+    """Each RIFF chunk's type and payload from ``start`` on."""
+    chunks, i = [], start
     while i + 8 <= len(data):
-        kinds.append(data[i : i + 4])
         size = int.from_bytes(data[i + 4 : i + 8], "little")
+        chunks.append((data[i : i + 4], data[i + 8 : i + 8 + size]))
         i += 8 + size + (size & 1)
-    return kinds
+    return chunks
 
 
 def _webp_has_metadata(data: bytes) -> bool:
@@ -202,4 +209,14 @@ def _webp_has_metadata(data: bytes) -> bool:
 
 
 def _webp_is_lossless(image: ValidatedImage) -> bool:
-    return image.content_type == "image/webp" and b"VP8L" in _webp_chunks(image.data)
+    """Whether any picture is lossless: the still image, or any frame of an animation.
+
+    An animation keeps each frame's ``VP8L`` or ``VP8 `` chunk inside its ``ANMF`` chunk,
+    after a 16-byte frame header. Mixed lossy and lossless frames count as lossless.
+    """
+    if image.content_type != "image/webp":
+        return False
+    for kind, payload in _webp_chunk_spans(image.data):
+        if kind == b"VP8L" or (kind == b"ANMF" and b"VP8L" in _webp_chunks(payload, 16)):
+            return True
+    return False
