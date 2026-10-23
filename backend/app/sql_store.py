@@ -89,7 +89,7 @@ _feed_events = _records(
     "feed_events",
     Column("room_id", _ID, nullable=False, index=True),
     Column("created_at", _TIMESTAMP, nullable=False),
-    Column("photo_url", Text, nullable=True),
+    Column("photo_url", Text, nullable=True, index=True),
 )
 _follows = _records(
     "follows",
@@ -400,6 +400,11 @@ class SqlStore:
 
     def get_feed_event(self, event_id: str) -> FeedEvent | None:
         return self._one(FeedEvent, _feed_events, _feed_events.c.id == event_id)
+
+    def photo_url_in_feed(self, url: str) -> bool:
+        """Whether any feed event shows this photo: one ``EXISTS`` query, undone events and deleted rooms included."""
+        with self._tx() as conn:
+            return bool(conn.execute(select(exists().where(_feed_events.c.photo_url == url))).scalar_one())
 
     def save_feed_event(self, event: FeedEvent) -> None:
         self._save(

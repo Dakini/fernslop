@@ -7,9 +7,11 @@ from urllib.parse import quote
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
+from sqlalchemy import event
 
-from app import live
+from app import live, timestamps
 from app.main import app
+from app.models import FeedEvent, Room
 from app.seed import seed_id
 from app.sql_store import SqlStore
 from app.store import get_store
@@ -124,6 +126,54 @@ def test_post_with_photo_copies_the_photos_url(api, store):
     assert response.json()["photo_url"] == photo["url"]
 
 
+def count_queries(store, request):
+    statements = []
+    listen = lambda *args: statements.append(args[2])
+    event.listen(store._engine, "before_cursor_execute", listen)
+    try:
+        response = request()
+    finally:
+        event.remove(store._engine, "before_cursor_execute", listen)
+    return response, len(statements)
+
+
+def add_room_with_post(store, photo_url=None, *, undone=False):
+    """A room with one post; returns the room id."""
+    now = timestamps.now()
+    room = Room(id=str(uuid.uuid4()), name="Plot", description="", region="", created_at=now, last_activity_at=now)
+    store.save_room(room)
+    store.save_feed_event(
+        FeedEvent(
+            id=str(uuid.uuid4()),
+            room_id=room.id,
+            type="post",
+            actor_name="Ann",
+            device_id="device-2",
+            room_plant_id=None,
+            text="Old",
+            photo_url=photo_url,
+            undo_payload=None,
+            undone_at=now if undone else None,
+            created_at=now,
+        )
+    )
+    return room.id
+
+
+# The photo-in-use check is one lookup by URL, not a read of every feed (#213).
+def test_photo_post_runs_as_many_queries_for_200_rooms_as_for_3(api, store):
+    room_id = room_id_of(store)
+    first, second = upload_photo(api), upload_photo(api)
+    few_response, few = count_queries(store, lambda: post(api, room_id, {"text": "", "photo_id": first["id"]}))
+    for _ in range(197):
+        add_room_with_post(store)
+
+    many_response, many = count_queries(store, lambda: post(api, room_id, {"text": "", "photo_id": second["id"]}))
+
+    assert (few_response.status_code, many_response.status_code) == (201, 201)
+    assert many == few > 0
+
+
 # --- Validation ------------------------------------------------------------------
 
 
@@ -151,6 +201,23 @@ def test_invalid_post_is_400_with_message_and_writes_nothing(api, store, notify,
     assert response.json()["message"] == message
     assert store.list_feed_events(room_id) == feed_before
     assert store.get_room(room_id).last_activity_at == activity_before
+    notify.assert_not_called()
+
+
+@pytest.mark.parametrize("where", ["other room", "undone post", "deleted room"])
+def test_photo_already_in_any_post_is_400_and_writes_nothing(api, store, notify, where):
+    photo = upload_photo(api)
+    other_id = add_room_with_post(store, photo["url"], undone=where == "undone post")
+    if where == "deleted room":
+        store.delete_room(other_id, timestamps.now())  # soft-deleted, not yet purged (#196)
+    room_id = room_id_of(store)
+    feed_before = store.list_feed_events(room_id)
+
+    response = post(api, room_id, {"text": "Mine", "photo_id": photo["id"]})
+
+    assert response.status_code == 400
+    assert response.json()["message"] == "That photo is already in a post"
+    assert store.list_feed_events(room_id) == feed_before
     notify.assert_not_called()
 
 
