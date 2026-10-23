@@ -38,6 +38,7 @@ from sqlalchemy import (
     delete,
     event,
     exists,
+    func,
     insert,
     select,
     update,
@@ -439,6 +440,11 @@ class SqlStore:
         }
         with self._tx() as conn:
             _upsert(conn, _photos, "id", values)
+
+    def photo_storage_bytes(self) -> int:
+        """Total size of the stored photo bytes, summed in the database (no photo is loaded)."""
+        with self._tx() as conn:
+            return int(conn.execute(select(func.coalesce(func.sum(func.length(_photos.c.data)), 0))).scalar_one())
 
     def delete_unreferenced_photos(self, older_than: datetime) -> int:
         """Delete photos created before ``older_than`` that no feed event's ``photo_url`` points at.

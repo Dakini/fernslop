@@ -2,7 +2,7 @@
 
 Run ``uv run python -m app.photo_cleanup [--hours N]``. It uses the configured
 database (``FERNSLOP_DATABASE_URL``, see ``app/store.py``). A photo goes if it is
-older than N hours (default 24) and no feed event's ``photo_url`` points at it.
+older than N hours (default 6) and no feed event's ``photo_url`` points at it.
 """
 
 import argparse
@@ -12,10 +12,14 @@ from datetime import timedelta
 from app import timestamps
 from app.store import get_store
 
+DEFAULT_HOURS = 6
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Delete photos older than N hours that no post uses.")
-    parser.add_argument("--hours", type=float, default=24, help="minimum age in hours (default 24)")
+    parser.add_argument(
+        "--hours", type=float, default=DEFAULT_HOURS, help=f"minimum age in hours (default {DEFAULT_HOURS})"
+    )
     args = parser.parse_args(argv)
 
     store = get_store()

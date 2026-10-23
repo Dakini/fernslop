@@ -117,6 +117,21 @@ def test_upload_over_the_decompression_bomb_pixel_limit_is_415_and_stores_nothin
     assert saved == []
 
 
+def test_upload_once_stored_photo_bytes_reach_the_limit_is_507_and_stores_nothing(api, store, saved, monkeypatch):
+    # The seeded photos plus one byte: the first upload is still below the ceiling and fills it.
+    monkeypatch.setenv("FERNSLOP_PHOTO_STORAGE_LIMIT_BYTES", str(store.photo_storage_bytes() + 1))
+    below = upload(api)
+    full_at = store.photo_storage_bytes()
+
+    response = upload(api)
+
+    assert below.status_code == 201
+    assert response.status_code == 507
+    assert response.json() == {"message": "Photo storage is full right now. Please try again later."}
+    assert len(saved) == 1
+    assert store.photo_storage_bytes() == full_at
+
+
 # --- Metadata stripping --------------------------------------------------------
 
 

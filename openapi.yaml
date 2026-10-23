@@ -579,6 +579,12 @@ paths:
         to the pixels first, so the photo still displays upright. The type stays the same,
         and an ICC colour profile, transparency and animation are kept. A photo without
         metadata is stored unchanged. The 5 MB limit applies to the file as sent.
+
+        Uploads stop with 507 while the stored photo bytes are at or above
+        `FERNSLOP_PHOTO_STORAGE_LIMIT_BYTES` (default 4 GiB, 4294967296), so photos cannot
+        fill the server's disk. Parallel uploads may overshoot the limit by a few photos.
+        Unposted photos are deleted after 6 hours (`python -m app.photo_cleanup`), which
+        frees space again. The mock never reports full.
       requestBody:
         required: true
         content:
@@ -614,6 +620,14 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "429":
           $ref: "#/components/responses/TooManyRequests"
+        "507":
+          description: |
+            Photo storage is full (stored photo bytes at or above
+            `FERNSLOP_PHOTO_STORAGE_LIMIT_BYTES`); nothing is stored. Message is
+            `Photo storage is full right now. Please try again later.`
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   /photos/{photoId}:
     get:

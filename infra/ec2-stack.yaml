@@ -217,6 +217,47 @@ Resources:
           aws ecr get-login-password --region ${AWS::Region} | \
             docker login --username AWS --password-stdin ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com
           docker compose up -d --pull always
+
+          echo "=== housekeeping timers ==="
+          # Each run is a one-off app container, so its output goes to the CloudWatch log group too.
+          # Persistent=true runs a missed tick at boot.
+          cat > /etc/systemd/system/fernslop-task@.service <<'UNIT'
+          [Unit]
+          Description=Fernslop housekeeping: python -m app.%i
+          Requires=docker.service
+          After=docker.service
+
+          [Service]
+          Type=oneshot
+          WorkingDirectory=/opt/app
+          ExecStart=/usr/bin/docker compose run --rm -T app python -m app.%i
+          UNIT
+          cat > /etc/systemd/system/fernslop-photo-cleanup.timer <<'UNIT'
+          [Unit]
+          Description=Delete unposted photos hourly
+
+          [Timer]
+          OnCalendar=hourly
+          Persistent=true
+          Unit=fernslop-task@photo_cleanup.service
+
+          [Install]
+          WantedBy=timers.target
+          UNIT
+          cat > /etc/systemd/system/fernslop-room-purge.timer <<'UNIT'
+          [Unit]
+          Description=Purge soft-deleted gardens daily
+
+          [Timer]
+          OnCalendar=daily
+          Persistent=true
+          Unit=fernslop-task@room_purge.service
+
+          [Install]
+          WantedBy=timers.target
+          UNIT
+          systemctl daemon-reload
+          systemctl enable --now fernslop-photo-cleanup.timer fernslop-room-purge.timer
           echo "=== bootstrap complete ==="
 
   ElasticIp:
