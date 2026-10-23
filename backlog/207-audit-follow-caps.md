@@ -25,3 +25,11 @@ One address cannot be sent a stream of confirmation emails, even from many IPs, 
 - Attempts are recorded in the same transaction that reads them, so parallel requests cannot all slip under the cap.
 
 **Open question (user):** keep the PM default of 3 attempts per address per 24 hours and no per-room cap?
+
+**Engineer:** Implemented with the confirmed cap: 3 requests per address per 24 hours across all rooms, with no per-room cap.
+- `StoredFollow.attempts` (a JSON list with a default, so no SQL column) records each request's time, pruned to 24 hours when the follow is saved. `followRoom` reads every follow of the address (new `list_follows_by_email`, matched on `email_key`) inside the same transaction that saves the attempt. A 4th request answers 429 with the same message and `Retry-After` format as the per-IP limit, sends nothing and writes nothing. A re-follow while unconfirmed still restarts the 7 days and re-sends the link. `FERNSLOP_RATE_LIMIT=off` also turns this cap off.
+- `room_purge` also calls the new `purge_unconfirmed_follows` and prints `Purged N unconfirmed follow(s)`. It uses the 7-day `CONFIRM_WINDOW` and ignores `--days`. The existing daily timer already runs it.
+- `openapi.yaml` `followRoom` documents the cap. The mock service needed no change because it never caps.
+- Tests: the 4th request across two rooms gets a 429 with nothing sent or changed, checked both unconfirmed and confirmed (one parametrized test), while another address is unaffected. A second test checks the purge. I also changed one assertion in `test_room_delete.py`, which is outside the listed files: it compared every line the purge printed, so it had to filter to the room lines.
+- Known gap: unsubscribing deletes the follow and its attempts, so an address that unsubscribes can follow 3 more times. Each follow needs a confirmation link, so this cannot be used to send a flood of emails.
+- Checks: `uv run pytest` (169 passed, 2 skipped), `uvx ruff check .` passes, and `openapi.yaml` parses.

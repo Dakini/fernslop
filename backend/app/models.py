@@ -251,6 +251,9 @@ class StoredFollow(ApiModel):
     created_at: Timestamp
     unsubscribe_token: str
     confirmed_at: Timestamp | None = None
+    # When this address asked to follow this room, pruned to the last 24 hours; the per-address
+    # cap (#207) counts these across all of the address's follows. Older rows have none.
+    attempts: list[Timestamp] = []
 
     def to_public(self) -> RoomFollow:
         """The follow as the API shows it, without the id, times or token."""

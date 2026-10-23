@@ -423,6 +423,24 @@ class SqlStore:
     def get_follow_by_token(self, token: str) -> StoredFollow | None:
         return self._one(StoredFollow, _follows, _follows.c.token == token)
 
+    def list_follows_by_email(self, email: str) -> list[StoredFollow]:
+        """Every follow of this address (case-insensitive), across all rooms."""
+        return self._many(StoredFollow, _follows, _follows.c.email_key == email.casefold())
+
+    def purge_unconfirmed_follows(self, created_before: datetime) -> int:
+        """Delete follows still unconfirmed and created before ``created_before``. Returns how many."""
+        with self._tx() as conn:
+            rows = conn.execute(select(_follows.c.id, _follows.c.json)).all()
+            due = [
+                row.id
+                for row in rows
+                if (follow := StoredFollow.model_validate_json(row.json)).confirmed_at is None
+                and follow.created_at < created_before
+            ]
+            if due:
+                conn.execute(delete(_follows).where(_follows.c.id.in_(due)))
+            return len(due)
+
     def save_follow(self, follow: StoredFollow) -> None:
         self._save(
             _follows,
