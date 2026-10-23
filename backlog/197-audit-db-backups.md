@@ -53,3 +53,26 @@ What could not be checked without deploying:
 - The presigned-URL download on the instance.
 
 Note: when `pg_dump` fails, the streamed upload can still leave an empty or truncated object, because the instance can't delete it. No metric is sent in that case, and the README says to check a dump with `pg_restore --list` before relying on it. The stack's `Description` still says the data is lost when the instance is replaced. I left it alone to avoid a merge conflict with #203; it can be reworded once that lands.
+
+**QA:**
+
+## QA: PASS
+
+- [x] S3 bucket with default encryption, all public access blocked, `DeletionPolicy: Retain`, 30-day expiry - PASS
+      Read `BackupBucket`: SSE-S3 (AES256), all 4 public access blocks, `DeletionPolicy` and `UpdateReplacePolicy: Retain`, lifecycle `expire-db-dumps` on `db/` with `ExpirationInDays: 30` (plus abort incomplete multipart after 1 day). `BackupBucketPolicy` denies non-TLS access.
+- [x] Instance role may only `s3:PutObject` under the backup prefix - PASS
+      `write-db-backups` grants `s3:PutObject` on `${BackupBucket.Arn}/db/*` only. No other policy in the role mentions S3 or the bucket, so there is no get, list or delete. The second statement is `cloudwatch:PutMetricData` limited by the `cloudwatch:namespace = Fernslop` condition.
+- [x] systemd timer (03:00 UTC, `Persistent=true`) streams `pg_dump -Fc` via `docker compose exec -T db` to `s3://<bucket>/db/fernslop-<UTC>.dump` without touching disk - PASS
+      The unit and timer in user data are `OnCalendar=*-*-* 03:00:00 UTC`, `Persistent=true`, enabled with `--now`. I extracted the script from the template, substituted the bucket and region, and ran it against a throwaway compose project (`fernslop-qa197`, port 55597) with a fake `aws` on PATH. It piped a 24.6 KB custom-format dump into `aws s3 cp - s3://qa-bucket/db/fernslop-20261023T001004Z.dump`, then called `put-metric-data`, exited 0 and logged only the object key.
+- [x] Each successful backup publishes a metric; alarm goes to ALARM after 26 hours without one (missing = breaching) and is on the dashboard - PASS
+      `BackupMissingAlarm`: `Fernslop/BackupSucceeded`, Sum, 3600 s x 26/26, `< 1`, `TreatMissingData: breaching`. The script publishes the metric without dimensions, and the alarm has none, so they match. A 26 h evaluation range with a 1 h period is within CloudWatch's 7-day limit for periods of at least 1 h. The dashboard has an alarm widget and a per-day count widget. Failure path: with `db` stopped, the script exits 1 and makes no `put-metric-data` call. With `aws s3 cp` failing, it also exits 1 with no metric call (pipefail).
+- [x] `infra/README.md` covers where the dumps are, the download with operator credentials and the restore (stop `app`, `pg_restore --clean`, start `app`) - PASS
+      All three are present. I followed the in-place steps on the throwaway compose stack: added "After dump garden", ran `docker compose stop app`, then `pg_restore --clean --if-exists --no-owner --single-transaction` from the dump (exit 0), then `docker compose start app`. `/api/health` returned ok and `/api/rooms` listed exactly the 3 seed gardens plus "QA garden 197". The later garden was gone.
+- [x] Restore done once into a throwaway `postgres:17-alpine` with the seed gardens plus a test garden, and noted in the issue comment - PASS
+      The engineer comment says so. I repeated it: `pg_restore --list` reported "dump is readable", the restore exited 0, there were 8 public tables, and `rooms` held Elm Street Allotment, Balcony Jungle, Orchard Corner and QA garden 197.
+- [x] Template validates; no app code changes - PASS
+      `uvx cfn-lint infra/ec2-stack.yaml` exits 0. The #197 commits (`c15615b..HEAD`) touch only `infra/ec2-stack.yaml`, `infra/README.md` and this issue.
+
+Tests: none, because this is infrastructure. `uvx cfn-lint infra/ec2-stack.yaml` exits 0. I ran the backup script, the restore and both failure paths by hand as described above. All throwaway containers, volumes and the image were removed, and the stack on :8000 was not touched.
+
+Not checked (needs a deploy): real stack creation and IAM enforcement, `aws s3 cp -` multipart upload with PutObject only on AL2023, the timer firing, alarm state changes, dashboard rendering and the presigned-URL download on the instance. As noted, a failed dump can leave an empty object (I saw a 0-byte object when `db` was down). It sends no metric and the README says to check dumps with `pg_restore --list`.
