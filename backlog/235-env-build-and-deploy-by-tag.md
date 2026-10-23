@@ -25,3 +25,5 @@
 - After #234 (its names, `deploy.sh <env>` and `DOMAIN=`). Only `infra/build.sh` (new), `deploy.sh`, `ec2-stack.yaml`, `ecr-stack.yaml`, `README.md`
 - The instance role may read only its own `deployed-tag` parameter; keep dev's physical names unchanged
 - Agents run only read-only AWS commands; the user runs builds, deploys and change sets. `shellcheck`/`cfn-lint` via `uvx` or brew, not `pyproject.toml`
+
+**Orchestrator decision:** `deploy.sh` and CI stop deploying the `fernslop-ecr` stack, which becomes a manual step in the README ([#236](236-env-iam-split-per-environment.md)). The SSM parameter for the recorded tag and keeping 5 `prod-` images are both confirmed.
