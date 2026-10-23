@@ -21,6 +21,13 @@ Parameters:
     Description: >
       dev names everything <AppPrefix> (the stack, log group /<AppPrefix>/app, dashboard, instance Name tag);
       prod names them prod-<AppPrefix>. Also the Environment tag and the BackupSucceeded dimension.
+  ImageTag:
+    Type: String
+    AllowedPattern: "^[0-9]{8}-[0-9]{6}-[0-9a-f]{7}$"
+    ConstraintDescription: an image tag built by infra/build.sh, YYYYMMDD-HHMMSS-<7-char sha>
+    Description: >
+      The app image a new or replaced instance boots (written to /opt/app/.env as APP_TAG). Later deploys run the
+      <stack name>-deploy SSM document and never change this; infra/deploy.sh passes the stack's previous value.
   VpcId:
     Type: AWS::EC2::VPC::Id
     Default: vpc-0123456789abcdef0
@@ -269,7 +276,8 @@ Resources:
               restart: unless-stopped
 
             app:
-              image: ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${AppPrefix}:latest
+              # APP_TAG comes from /opt/app/.env: the boot tag below, then whatever the deploy document set
+              image: ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${AppPrefix}:${!APP_TAG}
               env_file: app.env
               environment:
                 # Only Caddy (its fixed address below) may set the client IP with X-Forwarded-For;
@@ -367,7 +375,9 @@ Resources:
             echo "FERNSLOP_API_DOCS=0"
           } > app.env
           echo "SITE_ADDRESS=$SITE_ADDRESS" > caddy.env
-          chmod 600 db.env app.env caddy.env
+          # Read by docker compose for ${!APP_TAG} in the compose file; the deploy document replaces this line
+          echo "APP_TAG=${ImageTag}" > .env
+          chmod 600 db.env app.env caddy.env .env
 
           echo "=== db backups ==="
           # Nightly custom-format pg_dump streamed straight to S3 (never written to this disk), then a
@@ -460,6 +470,55 @@ Resources:
           systemctl daemon-reload
           systemctl enable --now fernslop-photo-cleanup.timer fernslop-room-purge.timer
           echo "=== bootstrap complete ==="
+
+  # The deploy procedure lives here, in the template, not in the workflow or script that triggers it. CI's role
+  # may send this document and nothing else (infra/github-oidc-stack.yaml), so the worst a stolen token can do is
+  # run an image that is already in ECR; AWS-RunShellScript would be root on the instance. It runs an existing
+  # tag: building is infra/build.sh's job.
+  DeployDocument:
+    Type: AWS::SSM::Document
+    Properties:
+      Name: !Sub "${AWS::StackName}-deploy"
+      DocumentType: Command
+      DocumentFormat: YAML
+      TargetType: /AWS::EC2::Instance
+      UpdateMethod: NewVersion
+      Tags:
+        - { Key: App, Value: !Ref AppPrefix }
+        - { Key: Environment, Value: !Ref Environment }
+      Content:
+        schemaVersion: "2.2"
+        description: >-
+          Run an image tag that infra/build.sh already pushed: set APP_TAG in /opt/app/.env, pull that image and
+          restart what changed. The compose file's app image must be <repo>:$APP_TAG.
+        parameters:
+          tag:
+            type: String
+            description: Image tag to run, YYYYMMDD-HHMMSS-<7-char sha>.
+            # SSM rejects any other value, so the one thing injected into the script cannot carry shell syntax
+            allowedPattern: "^[0-9]{8}-[0-9]{6}-[0-9a-f]{7}$"
+        mainSteps:
+          - action: aws:runShellScript
+            name: deploy
+            inputs:
+              timeoutSeconds: "1800"
+              runCommand:
+                - !Sub |
+                  set -euo pipefail
+                  cd /opt/app
+                  # An instance built before tags would silently re-pull :latest; stop instead
+                  if ! grep -qF -- '${!APP_TAG}' docker-compose.yaml; then
+                    echo 'Not deployed: the app image in /opt/app/docker-compose.yaml is not <repo>:${!APP_TAG} (see infra/README.md)' >&2
+                    exit 1
+                  fi
+                  aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com
+                  # Replace only the APP_TAG line; an older instance keeps its other .env lines
+                  umask 077
+                  touch .env
+                  { awk '!/^APP_TAG=/' .env; echo 'APP_TAG={{ tag }}'; } > .env.new
+                  mv .env.new .env
+                  docker compose up -d --pull always
+                  docker image prune -f
 
   ElasticIp:
     Type: AWS::EC2::EIP
@@ -558,3 +617,6 @@ Outputs:
     Value: !Ref LogGroup
   BackupBucketName:
     Value: !Ref BackupBucket
+  DeployDocumentName:
+    Description: The SSM document that runs an image tag on the instance (<stack name>-deploy).
+    Value: !Ref DeployDocument

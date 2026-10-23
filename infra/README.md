@@ -1,6 +1,23 @@
 # Infra
 
-`ec2-stack.yaml` runs Fernslop on one EC2 instance with docker compose (`db`, `app`, `caddy`) in `/opt/app`; `deploy.sh` creates or updates it.
+`ec2-stack.yaml` runs Fernslop on one EC2 instance with docker compose (`db`, `app`, `caddy`) in `/opt/app`. `build.sh` builds one image per commit; `deploy.sh <env> <tag>` creates or updates the stack and deploys a tag.
+
+## Build once, deploy a tag
+
+`infra/build.sh` builds the arm64 image for `HEAD` and pushes it to ECR as `<repo>:<tag>`, where the tag is `YYYYMMDD-HHMMSS-<7-char sha>`: the commit's committer time in UTC plus its short sha, so the same commit always gives the same tag. There is no `:latest`. The tag is baked into the image (`--build-arg FERNSLOP_IMAGE_TAG`), so `/api/health` reports it as `version`.
+
+```sh
+infra/build.sh --print-tag   # print HEAD's tag; calls neither AWS nor docker
+TAG=$(infra/build.sh)        # needs a clean tree and docker; skips the push if the tag is already in ECR
+```
+
+The last line on stdout is the tag, everything else goes to stderr. `APP_PREFIX` names the repository; `ECR_REPOSITORY_URI` (the repository URI) replaces the account lookup.
+
+The ECR repository is immutable (a tag can never be pushed twice), expires untagged images after a day and keeps the last 50 tagged ones. A tag older than the last 50 builds is gone, so an environment that lags that far behind cannot pull its image again.
+
+Each EC2 stack owns an SSM document, `<stack name>-deploy` (`fernslop-deploy`, `prod-fernslop-deploy`; stack output `DeployDocumentName`), with one parameter, `tag`, which must match the tag pattern. It logs in to ECR, replaces the `APP_TAG=` line in `/opt/app/.env` (leaving other lines alone), runs `docker compose up -d --pull always` and prunes images. The compose file's app image is `<repo>:${APP_TAG}`. If it is not, the document stops with a message instead of pulling something else. The stack's `ImageTag` parameter is only what a new or replaced instance boots; deploys never change it.
+
+`deploy.sh <env> <tag>` refuses a missing tag, a bad format or a tag that is not in ECR before it changes anything. It builds nothing and does not deploy the ECR stack. On an existing stack it updates the EC2 stack (keeping its `ImageTag`), sends the stack's document, waits for it and then requires `/api/health` to report the tag. A first deploy creates the stack with `ImageTag=<tag>`.
 
 ## Environments and names
 
@@ -18,14 +35,15 @@ Dev keeps the names the single stack had before environments existed. Every reso
 - On every update, `deploy.sh` passes the running instance's AMI as `AmiId`. Without it, `LatestAmiId` would resolve to the newest Amazon Linux image and replace the instance, losing data since the last backup.
 
 ```sh
-DOMAIN=fernslop.example.com infra/deploy.sh dev   # first deploy
-infra/deploy.sh dev                                # later deploys
+TAG=$(infra/build.sh)
+DOMAIN=fernslop.example.com infra/deploy.sh dev "$TAG"   # first deploy
+infra/deploy.sh dev "$TAG"                                # later deploys
 APP_PREFIX=myfork infra/deploy.sh prod --names
 ```
 
 ### One-time: move today's stacks onto the parameterised templates
 
-Do this once, before the next `deploy.sh dev` or CI deploy, with operator credentials, from the repo root. It moves the live `fernslop` and `fernslop-ecr` stacks onto these templates with dev's names. You create each change set, check it, and only then execute it. Run step 4 at a quiet time: the instance stops and starts once, so expect about a minute of downtime.
+Do this once, before the next `deploy.sh dev` or CI deploy (and before the next section), with operator credentials, from the repo root. It moves the live `fernslop` and `fernslop-ecr` stacks onto these templates with dev's names. You create each change set, check it, and only then execute it. Run step 4 at a quiet time: the instance stops and starts once, so expect about a minute of downtime.
 
 1. **Backup script.** Add the `Environment` dimension to the instance's `/usr/local/bin/fernslop-backup`. The script is not replaced when the stack updates: `UserData` only runs on an instance's first boot. Then run one backup, so the alarm's new metric already has a data point:
 
@@ -96,7 +114,107 @@ Do this once, before the next `deploy.sh dev` or CI deploy, with operator creden
    curl -fsS https://<DomainName>/api/health
    ```
 
-   From then on, the stack's `AmiId` parameter holds the instance's AMI, so `deploy.sh dev` (and CI, which cannot read EC2 instances) keeps it.
+   From then on, the stack's `AmiId` parameter holds the instance's AMI, so `deploy.sh dev` keeps it.
+
+### One-time: build by tag and deploy through the SSM document
+
+Do this once, after the section above, with operator credentials, from the repo root, on a clean checkout of the commit you want dev to run. Until you finish it, `deploy.sh dev <tag>` refuses the stack ("has no ImageTag yet"). Nothing here needs the instance to have the newer files (backup script, hardened compose file, Caddy config) that a freshly created stack gets: each step says what an older instance looks like.
+
+1. **ECR change set.** The repository becomes immutable and gets the new lifecycle rule, and the stack gains the push role. The role trusts the GitHub OIDC provider that the `fernslop-github` stack owns, so find its ARN:
+
+   ```sh
+   OIDC=$(aws iam list-open-id-connect-providers --query "OpenIDConnectProviderList[?ends_with(Arn,'oidc-provider/token.actions.githubusercontent.com')].Arn" --output text)
+   echo "$OIDC"   # one arn:aws:iam::<account>:oidc-provider/token.actions.githubusercontent.com
+   aws cloudformation create-change-set --stack-name fernslop-ecr --change-set-name by-tag \
+     --template-body file://infra/ecr-stack.yaml --capabilities CAPABILITY_IAM \
+     --parameters ParameterKey=AppPrefix,ParameterValue=fernslop ParameterKey=ExistingOidcProviderArn,ParameterValue="$OIDC"
+   aws cloudformation wait change-set-create-complete --stack-name fernslop-ecr --change-set-name by-tag
+   aws cloudformation describe-change-set --stack-name fernslop-ecr --change-set-name by-tag --output table \
+     --query "Changes[].ResourceChange.{Id:LogicalResourceId,Action:Action,Replacement:Replacement}"
+   ```
+
+   Expect `Repository` `Modify` with Replacement `False` and `EcrPushRole` `Add`; nothing `Remove`. If the OIDC provider is not listed, `fernslop-github` has not created it yet: stop. Execute, then check:
+
+   ```sh
+   aws cloudformation execute-change-set --stack-name fernslop-ecr --change-set-name by-tag
+   aws cloudformation wait stack-update-complete --stack-name fernslop-ecr
+   aws ecr describe-repositories --repository-names fernslop --query "repositories[0].imageTagMutability"   # IMMUTABLE
+   aws ecr get-lifecycle-policy --repository-name fernslop --query lifecyclePolicyText --output text          # untagged 1 day, tagged 50
+   aws cloudformation describe-stacks --stack-name fernslop-ecr --query "Stacks[0].Outputs" --output table  # EcrPushRoleArn, RepositoryUri
+   ```
+
+   Images already in the repository (including `:latest`, which the running instance uses) stay; `:latest` just cannot be pushed again. `EcrPushRoleArn` and `RepositoryUri` become the GitHub repository variables `ECR_PUSH_ROLE_ARN` and `ECR_REPOSITORY_URI` (next to `AWS_REGION`).
+
+2. **Build the first tag.** Docker must be running.
+
+   ```sh
+   TAG=$(infra/build.sh)
+   echo "$TAG"   # 20261023-190957-e7770e1 (yours differs)
+   aws ecr describe-images --repository-name fernslop --image-ids imageTag="$TAG" --query "imageDetails[0].imageTags"
+   ```
+
+   The describe prints the tag. `build.sh` refuses a dirty tree and skips the push when the tag already exists, so it is safe to run again.
+
+3. **EC2 change set (create it, do not execute yet).** It adds the `DeployDocument` and the `ImageTag` parameter and keeps every other parameter:
+
+   ```sh
+   aws cloudformation create-change-set --stack-name fernslop --change-set-name by-tag \
+     --template-body file://infra/ec2-stack.yaml --capabilities CAPABILITY_IAM \
+     --parameters ParameterKey=ImageTag,ParameterValue="$TAG" \
+       ParameterKey=AppPrefix,UsePreviousValue=true ParameterKey=Environment,UsePreviousValue=true \
+       ParameterKey=AmiId,UsePreviousValue=true ParameterKey=AllowPlainHttp,UsePreviousValue=true \
+       ParameterKey=DomainName,UsePreviousValue=true ParameterKey=LatestAmiId,UsePreviousValue=true \
+       ParameterKey=VpcId,UsePreviousValue=true ParameterKey=SubnetId,UsePreviousValue=true \
+       ParameterKey=InstanceType,UsePreviousValue=true
+   aws cloudformation wait change-set-create-complete --stack-name fernslop --change-set-name by-tag
+   aws cloudformation describe-change-set --stack-name fernslop --change-set-name by-tag --output table \
+     --query "Changes[].ResourceChange.{Id:LogicalResourceId,Action:Action,Replacement:Replacement,Scope:join(',',Scope)}"
+   aws cloudformation describe-change-set --stack-name fernslop --change-set-name by-tag --output table \
+     --query "Changes[?ResourceChange.LogicalResourceId=='Instance'].ResourceChange.Details[].Target.{Attribute:Attribute,Name:Name,Recreation:RequiresRecreation}"
+   ```
+
+   Check:
+
+   - `DeployDocument` is `Add`. No row has Replacement `True` or `Conditional`, and nothing is `Remove`.
+   - `Instance` is `Modify` and its details list only `UserData` (Recreation `Never`/`False`): the boot script now writes `APP_TAG` and the compose file uses it. UserData does not run again on an existing instance, so this changes nothing on it, but CloudFormation applies it with one stop and start, about a minute of downtime. Run step 4 at a quiet time.
+   - If #234's section above was not completed on this stack, `Add` rows for resources newer than the live stack (`BackupBucket`, `BackupMissingAlarm`, ...) are expected, as they were there.
+
+   If anything else shows up, delete the change set (`aws cloudformation delete-change-set --stack-name fernslop --change-set-name by-tag`) and report it.
+
+4. **Execute it.**
+
+   ```sh
+   aws cloudformation execute-change-set --stack-name fernslop --change-set-name by-tag
+   aws cloudformation wait stack-update-complete --stack-name fernslop
+   aws cloudformation describe-stacks --stack-name fernslop --query "Stacks[0].Outputs[?OutputKey=='DeployDocumentName'].OutputValue" --output text   # fernslop-deploy
+   aws ssm describe-document --name fernslop-deploy --query "Document.[Status,Parameters[0].Name]" --output text                                    # Active tag
+   curl -fsS https://<DomainName>/api/health
+   ```
+
+   The app still runs the old `:latest` image, so health has no `version` yet.
+
+5. **Point the live compose file at the tag.** The instance was built from an older template, so `/opt/app/docker-compose.yaml` still has the app image `...amazonaws.com/fernslop:latest`. Open an SSM session (`aws ssm start-session --target <InstanceId>`, then `sudo -i`) and edit it:
+
+   ```sh
+   cd /opt/app
+   ls                                   # docker-compose.yaml must be there; stop and report if the file is named otherwise
+   cp -p docker-compose.yaml docker-compose.yaml.bak
+   sed -i 's#^\( *image: .*amazonaws\.com/[a-z0-9-]*\):latest *$#\1:${APP_TAG}#' docker-compose.yaml
+   grep -n 'image:' docker-compose.yaml     # app: ...amazonaws.com/fernslop:${APP_TAG}; the other images unchanged
+   grep -c ':latest' docker-compose.yaml    # 0
+   ```
+
+   The document needs nothing else from the older instance. It adds `APP_TAG` to `/opt/app/.env`: an older instance has a single `.env` with the database and app settings, and the document keeps every other line in it. A newer one has no `.env` and gets a new one (mode 600). If the `sed` matched nothing, edit the app image line by hand to end in `:${APP_TAG}`. Do not run `docker compose` here yourself; step 6 does.
+
+6. **Deploy the tag.**
+
+   ```sh
+   infra/deploy.sh dev "$TAG"
+   ```
+
+   It checks the tag is in ECR, updates the stack with no changes (the same `ImageTag`), runs `fernslop-deploy` and waits. It ends with `Deployed <tag> to dev` once `curl https://<DomainName>/api/health` returns `"version":"<tag>"`. On a failure it prints the document's output; a "not deployed" message from the document means step 5 did not take. To see the document's last run: `aws ssm list-command-invocations --filters key=DocumentName,value=fernslop-deploy --details`.
+
+   Later deploys are `TAG=$(infra/build.sh)` and `infra/deploy.sh dev "$TAG"`; CI does the same through the document ([#238](../backlog/238-env-ci-build-and-deploy-dev.md)).
 
 ## GitHub Actions deploy role (one-time setup)
 

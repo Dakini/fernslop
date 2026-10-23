@@ -1,21 +1,27 @@
 #!/usr/bin/env bash
-# Deploy Fernslop to AWS: ECR repo -> image -> EC2 stack (first time) or roll the instance forward (after).
-# Usage: [DOMAIN=<domain>] infra/deploy.sh <dev|prod>     deploy that environment
-#        infra/deploy.sh <dev|prod> --names               print the resolved names; calls no AWS
+# Deploy an image tag that infra/build.sh already pushed to ECR: create the EC2 stack on the first deploy, or update
+# it and run its SSM deploy document (<stack name>-deploy) after. Builds nothing and never touches the ECR stack.
+# Usage: [DOMAIN=<domain>] infra/deploy.sh <dev|prod> <tag>   deploy that tag to that environment
+#        infra/deploy.sh <dev|prod> --names                   print the resolved names; calls no AWS
+# <tag> is what build.sh prints: YYYYMMDD-HHMMSS-<7-char sha>. It must be in ECR, and /api/health must report it
+# once the deploy is done.
 # APP_PREFIX (default fernslop, lowercase letters, digits and hyphens) names everything: dev uses <prefix>,
 # prod uses prod-<prefix>, and both share the <prefix> ECR repo in the <prefix>-ecr stack.
 # DOMAIN is only read on the first deploy (asked for if missing); on an existing stack it must match the
 # stack's DomainName. ALLOW_PLAIN_HTTP=true creates a plain-HTTP stack with no domain.
-# CFN_ROLE_ARN=<arn> runs the stack updates as that CloudFormation service role: CI, infra/github-oidc-stack.yaml.
+# A first deploy boots <tag>. An update keeps the stack's ImageTag (what a replaced instance would boot) and
+# runs the tag through the SSM document instead.
+# CFN_ROLE_ARN=<arn> runs the stack updates as that CloudFormation service role.
 set -euo pipefail
 
-usage() { echo "Usage: [DOMAIN=<domain>] infra/deploy.sh <dev|prod> [--names]" >&2; exit 1; }
+USAGE="Usage: [DOMAIN=<domain>] infra/deploy.sh <dev|prod> <tag>   (infra/deploy.sh <dev|prod> --names prints the names)"
+TAG_PATTERN='^[0-9]{8}-[0-9]{6}-[0-9a-f]{7}$'
 
-# 0. Names: no AWS calls before this point, so --names works without credentials
+# 0. Names and arguments: no AWS calls before the tag is checked, so --names works without credentials
 ENVIRONMENT="${1:-}"
 case "$ENVIRONMENT" in
   dev | prod) ;;
-  "") echo "Missing environment. Usage: [DOMAIN=<domain>] infra/deploy.sh <dev|prod> [--names]" >&2; exit 1 ;;
+  "") echo "Missing environment. $USAGE" >&2; exit 1 ;;
   *) echo "Unknown environment '$ENVIRONMENT': use dev or prod" >&2; exit 1 ;;
 esac
 PREFIX="${APP_PREFIX:-fernslop}"
@@ -25,7 +31,7 @@ if ! [[ "$PREFIX" =~ ^[a-z0-9-]+$ ]]; then
 fi
 if [ "$ENVIRONMENT" = prod ]; then NAME="prod-$PREFIX"; else NAME="$PREFIX"; fi
 STACK="$NAME"            # ec2-stack.yaml; also the dashboard name and the instance's Name tag
-ECR_STACK="$PREFIX-ecr"  # ecr-stack.yaml, shared by both environments
+ECR_STACK="$PREFIX-ecr"  # ecr-stack.yaml, shared by both environments; deployed by hand, never here
 LOG_GROUP="/$NAME/app"
 
 if [ "${2:-}" = "--names" ]; then
@@ -37,20 +43,27 @@ ecr repo     $PREFIX
 log group    $LOG_GROUP
 dashboard    $NAME
 instance tag Name=$NAME
+deploy doc   $STACK-deploy
 EOF
   exit 0
 fi
-[ -z "${2:-}" ] || usage
+TAG="${2:-}"
+if [ -z "$TAG" ]; then echo "Missing tag. $USAGE" >&2; exit 1; fi
+if ! [[ "$TAG" =~ $TAG_PATTERN ]]; then
+  echo "Bad tag '$TAG': expected YYYYMMDD-HHMMSS-<7-char sha>, as infra/build.sh prints" >&2
+  exit 1
+fi
+[ -z "${3:-}" ] || { echo "$USAGE" >&2; exit 1; }
 
 cd "$(dirname "$0")/.."
-TAG=$(git rev-parse --short HEAD)
 REGION=$(aws configure get region)
-ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
-REGISTRY="$ACCOUNT.dkr.ecr.$REGION.amazonaws.com"
 
-stack_output() { # <stack> <key>
-  aws cloudformation describe-stacks --stack-name "$1" \
-    --query "Stacks[0].Outputs[?OutputKey=='$2'].OutputValue" --output text
+stack_output() { # <stack> <key>; empty when the stack has no such output
+  local v
+  v=$(aws cloudformation describe-stacks --stack-name "$1" \
+    --query "Stacks[0].Outputs[?OutputKey=='$2'].OutputValue" --output text)
+  [ "$v" = "None" ] && v=""
+  echo "$v"
 }
 stack_param() { # <stack> <key>; empty when the stack has no such parameter or it is empty
   local v
@@ -60,8 +73,20 @@ stack_param() { # <stack> <key>; empty when the stack has no such parameter or i
   echo "$v"
 }
 
-# 1. A domain is required (HTTPS) on the first deploy unless ALLOW_PLAIN_HTTP=true; an existing stack keeps its
-# own. Checked before the build.
+# 1. The image must exist (read-only), before anything changes
+if OUT=$(aws ecr describe-images --region "$REGION" --repository-name "$PREFIX" --image-ids "imageTag=$TAG" \
+    --query 'imageDetails[0].imageTags' --output text 2>&1); then
+  :
+elif grep -q ImageNotFoundException <<<"$OUT"; then
+  echo "Tag $TAG is not in ECR repository $PREFIX: run infra/build.sh at that commit first" >&2
+  exit 1
+else
+  echo "Could not look up $PREFIX:$TAG in ECR: $OUT" >&2
+  exit 1
+fi
+
+# 2. A domain is required (HTTPS) on the first deploy unless ALLOW_PLAIN_HTTP=true; an existing stack keeps its
+# own, and must already take an ImageTag (infra/README.md, one-time steps).
 STACK_EXISTS=false
 aws cloudformation describe-stacks --stack-name "$STACK" >/dev/null 2>&1 && STACK_EXISTS=true
 DOMAIN_ARG="${DOMAIN:-}"
@@ -72,57 +97,74 @@ if [ "$STACK_EXISTS" = true ]; then
     echo "DOMAIN=$DOMAIN_ARG differs from stack $STACK's DomainName '$OLD_DOMAIN'; a domain change is a manual cutover, not a deploy" >&2
     exit 1
   fi
+  OLD_TAG=$(stack_param "$STACK" ImageTag)
+  if [ -z "$OLD_TAG" ]; then
+    echo "Stack $STACK has no ImageTag yet: run the one-time steps in infra/README.md (build and deploy by tag) first" >&2
+    exit 1
+  fi
 elif [ -z "$DOMAIN_ARG" ] && [ "$PLAIN" != "true" ]; then
   read -r -p "Domain name for the site (served over HTTPS; you point its DNS at the instance after): " DOMAIN_ARG || true
   if [ -z "$DOMAIN_ARG" ]; then
-    echo "A domain is required: DOMAIN=<domain> infra/deploy.sh $ENVIRONMENT." >&2
-    echo "To run plain HTTP on the instance's IP instead (no TLS): ALLOW_PLAIN_HTTP=true infra/deploy.sh $ENVIRONMENT" >&2
+    echo "A domain is required: DOMAIN=<domain> infra/deploy.sh $ENVIRONMENT $TAG." >&2
+    echo "To run plain HTTP on the instance's IP instead (no TLS): ALLOW_PLAIN_HTTP=true infra/deploy.sh $ENVIRONMENT $TAG" >&2
     exit 1
   fi
 fi
 
-# 2. Registry (shared by dev and prod)
-# ${CFN_ROLE_ARN:+...} adds --role-arn only when CFN_ROLE_ARN is set; operator deploys are unchanged
-aws cloudformation deploy --stack-name "$ECR_STACK" --template-file infra/ecr-stack.yaml --no-fail-on-empty-changeset \
-  --parameter-overrides AppPrefix="$PREFIX" \
-  ${CFN_ROLE_ARN:+--role-arn "$CFN_ROLE_ARN"}
-REPO=$(stack_output "$ECR_STACK" RepositoryUri)
-
-# 3. Image (the instance is ARM). :latest is what the instance's compose file runs.
-aws ecr get-login-password | docker login --username AWS --password-stdin "$REGISTRY"
-docker buildx build --platform linux/arm64 --push -t "$REPO:$TAG" -t "$REPO:latest" .
-
-# 4. Instance: create it (it pulls :latest on boot) or tell the running one to pull and restart
+# 3. Instance: create it (it boots the tag) or update the stack and run the tag through the SSM document
+# ${CFN_ROLE_ARN:+...} adds --role-arn only when CFN_ROLE_ARN is set
 if [ "$STACK_EXISTS" = true ]; then
   # A stack created before a domain was required has none: keep it on plain HTTP rather than fail the update
   ALLOW=false
   [ -z "$OLD_DOMAIN" ] && ALLOW=true
   # Keep the running instance's AMI: LatestAmiId re-resolves on every update, and a newer image replaces the
-  # instance. The stack's AmiId once set (no EC2 read needed, so CI can deploy), else the instance's own.
+  # instance. The stack's AmiId once set (no EC2 read needed), else the instance's own.
   AMI=$(stack_param "$STACK" AmiId)
   if [ -z "$AMI" ]; then
     AMI=$(aws ec2 describe-instances --instance-ids "$(stack_output "$STACK" InstanceId)" \
       --query "Reservations[0].Instances[0].ImageId" --output text)
   fi
+  # ImageTag stays what it was: changing it would change the instance's UserData
   aws cloudformation deploy --stack-name "$STACK" --template-file infra/ec2-stack.yaml \
     --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset \
     --parameter-overrides AppPrefix="$PREFIX" Environment="$ENVIRONMENT" AmiId="$AMI" AllowPlainHttp="$ALLOW" \
+      ImageTag="$OLD_TAG" \
     ${CFN_ROLE_ARN:+--role-arn "$CFN_ROLE_ARN"}
   INSTANCE=$(stack_output "$STACK" InstanceId)
-  CMD=$(aws ssm send-command --instance-ids "$INSTANCE" --document-name AWS-RunShellScript \
-    --parameters 'commands=["set -e","cd /opt/app",
-      "aws ecr get-login-password --region '"$REGION"' | docker login --username AWS --password-stdin '"$REGISTRY"'",
-      "docker compose up -d --pull always","docker image prune -f"]' \
+  DOCUMENT=$(stack_output "$STACK" DeployDocumentName)
+  CMD=$(aws ssm send-command --instance-ids "$INSTANCE" --document-name "$DOCUMENT" --parameters "tag=$TAG" \
     --query Command.CommandId --output text)
-  aws ssm wait command-executed --command-id "$CMD" --instance-id "$INSTANCE"
+  echo "Sent $DOCUMENT with tag=$TAG to $INSTANCE (command $CMD); waiting ..."
+  # Not `aws ssm wait`: it gives up after 100 seconds, and a first pull can take longer
+  STATUS=Pending
+  ERRORS=0
+  for _ in $(seq 360); do
+    if STATUS=$(aws ssm get-command-invocation --command-id "$CMD" --instance-id "$INSTANCE" \
+        --query Status --output text 2>/dev/null); then
+      ERRORS=0
+    else
+      # The invocation can take a moment to appear after send-command
+      STATUS=Pending
+      ERRORS=$((ERRORS + 1))
+      [ "$ERRORS" -lt 6 ] || { echo "Cannot read command $CMD's status on $INSTANCE" >&2; exit 1; }
+    fi
+    case "$STATUS" in Pending | InProgress | Delayed) sleep 5 ;; *) break ;; esac
+  done
+  if [ "$STATUS" != Success ]; then
+    echo "Deploy document finished with status $STATUS; its output:" >&2
+    aws ssm get-command-invocation --command-id "$CMD" --instance-id "$INSTANCE" \
+      --query "[StandardOutputContent,StandardErrorContent]" --output text >&2 || true
+    exit 1
+  fi
 else
   aws cloudformation deploy --stack-name "$STACK" --template-file infra/ec2-stack.yaml \
     --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset \
-    --parameter-overrides AppPrefix="$PREFIX" Environment="$ENVIRONMENT" \
+    --parameter-overrides AppPrefix="$PREFIX" Environment="$ENVIRONMENT" ImageTag="$TAG" \
       DomainName="$DOMAIN_ARG" AllowPlainHttp="$PLAIN" \
     ${CFN_ROLE_ARN:+--role-arn "$CFN_ROLE_ARN"}
 fi
 
+# 4. Done when /api/health reports the tag: a healthy old container does not count
 URL=$(stack_output "$STACK" Url)
 IP=$(stack_output "$STACK" ElasticIp)
 SITE_DOMAIN=$(stack_param "$STACK" DomainName)
@@ -132,10 +174,14 @@ if [ -n "$SITE_DOMAIN" ]; then
   # Reach the instance by IP before the record exists; the certificate only issues once DNS resolves
   CURL+=(--resolve "$SITE_DOMAIN:443:$IP")
 fi
-echo "Waiting for $URL/api/health ..."
+echo "Waiting for $URL/api/health to report $TAG ..."
+BODY=""
 for _ in $(seq 60); do
-  "${CURL[@]}" "$URL/api/health" >/dev/null 2>&1 && { echo "Deployed $TAG to $ENVIRONMENT: $URL"; exit 0; }
+  if BODY=$("${CURL[@]}" "$URL/api/health" 2>/dev/null) && grep -Eq "\"version\" *: *\"$TAG\"" <<<"$BODY"; then
+    echo "Deployed $TAG to $ENVIRONMENT: $URL"
+    exit 0
+  fi
   sleep 10
 done
-echo "Not healthy after 10 minutes; see the CloudWatch log group $LOG_GROUP (Caddy logs the certificate attempts)" >&2
+echo "Not reporting $TAG after 10 minutes (last /api/health: ${BODY:-no answer}); see the CloudWatch log group $LOG_GROUP (Caddy logs the certificate attempts)" >&2
 exit 1

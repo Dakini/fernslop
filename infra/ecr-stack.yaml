@@ -1,5 +1,8 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Fernslop - ECR repository for the app image, shared by the dev and prod stacks (stack <AppPrefix>-ecr).
+Description: >
+  Fernslop - ECR repository for the app image, shared by the dev and prod stacks (stack <AppPrefix>-ecr), and the
+  role CI assumes to push images built from main. Images are tagged YYYYMMDD-HHMMSS-<sha> by infra/build.sh and
+  are immutable.
 
 Parameters:
   AppPrefix:
@@ -8,6 +11,17 @@ Parameters:
     AllowedPattern: "^[a-z0-9-]+$"
     ConstraintDescription: lowercase letters, digits and hyphens only
     Description: Names the repository; infra/deploy.sh passes APP_PREFIX.
+  GitHubRepo:
+    Type: String
+    Default: Dakini/fernslop
+    Description: owner/name of the repository whose main branch may push images
+  ExistingOidcProviderArn:
+    Type: String
+    AllowedPattern: "^arn:aws:iam::[0-9]{12}:oidc-provider/token\\.actions\\.githubusercontent\\.com$"
+    ConstraintDescription: the ARN of the account's token.actions.githubusercontent.com OIDC provider
+    Description: >
+      The account's GitHub OIDC provider, which the fernslop-github stack owns (infra/github-oidc-stack.yaml). This
+      stack never creates it. Find it with: aws iam list-open-id-connect-providers
 
 Resources:
   Repository:
@@ -15,17 +29,64 @@ Resources:
     Properties:
       RepositoryName: !Ref AppPrefix
       EmptyOnDelete: true
+      # A tag always names the one image it was pushed with, so a deployed tag cannot change underneath dev or prod
+      ImageTagMutability: IMMUTABLE
       ImageScanningConfiguration: { ScanOnPush: true }
       LifecyclePolicy:
         LifecyclePolicyText: |
-          {"rules":[{"rulePriority":1,"description":"keep the last 10 images","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":10},"action":{"type":"expire"}}]}
+          {"rules":[
+            {"rulePriority":1,"description":"expire untagged images after 1 day","selection":{"tagStatus":"untagged","countType":"sinceImagePushed","countUnit":"days","countNumber":1},"action":{"type":"expire"}},
+            {"rulePriority":2,"description":"keep the last 50 tagged images","selection":{"tagStatus":"tagged","tagPatternList":["*"],"countType":"imageCountMoreThan","countNumber":50},"action":{"type":"expire"}}
+          ]}
       # One repository serves both environments, so it belongs to neither
+      Tags:
+        - { Key: App, Value: !Ref AppPrefix }
+        - { Key: Environment, Value: shared }
+
+  # CI's build job assumes this to push. It can push images to this repository and read their tags; it has no
+  # deploy rights. Only workflow runs on main can assume it.
+  EcrPushRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: !Sub "Lets ${GitHubRepo} push images built from main to the ${AppPrefix} ECR repository"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Federated: !Ref ExistingOidcProviderArn }
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                "token.actions.githubusercontent.com:aud": sts.amazonaws.com
+                "token.actions.githubusercontent.com:sub": !Sub "repo:${GitHubRepo}:ref:refs/heads/main"
+      Policies:
+        - PolicyName: push-image
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - { Sid: AuthToken, Effect: Allow, Action: "ecr:GetAuthorizationToken", Resource: "*" }
+              - Sid: PushAndDescribe
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:PutImage
+                  - ecr:DescribeImages
+                Resource: !GetAtt Repository.Arn
       Tags:
         - { Key: App, Value: !Ref AppPrefix }
         - { Key: Environment, Value: shared }
 
 Outputs:
   RepositoryUri:
+    Description: Set as the ECR_REPOSITORY_URI repository variable.
     Value: !GetAtt Repository.RepositoryUri
   RepositoryArn:
     Value: !GetAtt Repository.Arn
+  EcrPushRoleArn:
+    Description: Set as the ECR_PUSH_ROLE_ARN repository variable.
+    Value: !GetAtt EcrPushRole.Arn
