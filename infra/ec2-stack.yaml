@@ -1,8 +1,8 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   Fernslop - one small EC2 instance running the app and Postgres with docker compose, fronted by Caddy,
-  with logs and a dashboard in CloudWatch. Plain HTTP on an Elastic IP by default; set DomainName for
-  automatic Let's Encrypt TLS. One instance only: the live SSE feed is in-process
+  with logs and a dashboard in CloudWatch. Serves HTTPS on DomainName (required) with an automatic Let's
+  Encrypt certificate; AllowPlainHttp=true serves plain HTTP on the Elastic IP instead. One instance only: the live SSE feed is in-process
   (backlog/parked/090-api-live-multi-worker.md). Not a production setup: the database lives on the
   instance's disk, so replacing the instance loses the data.
 
@@ -25,7 +25,23 @@ Parameters:
   DomainName:
     Type: String
     Default: ""
-    Description: Optional. Its DNS must point at the Elastic IP; Caddy then gets a Let's Encrypt certificate for it.
+    Description: >
+      Required unless AllowPlainHttp=true. Its DNS must point at the Elastic IP; Caddy then gets a Let's Encrypt
+      certificate for it.
+  AllowPlainHttp:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Set to true to run without DomainName, serving plain HTTP on the Elastic IP (no TLS).
+
+Rules:
+  DomainRequired:
+    RuleCondition: !Equals [!Ref AllowPlainHttp, "false"]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref DomainName, ""]]
+        AssertDescription: >
+          DomainName is required (the site is served over HTTPS). To run plain HTTP on the Elastic IP
+          instead, set AllowPlainHttp=true.
 
 Conditions:
   HasDomain: !Not [!Equals [!Ref DomainName, ""]]
@@ -179,7 +195,33 @@ Resources:
               # -1 flushes immediately, which the live SSE stream needs
               reverse_proxy app:8000 {
                   flush_interval -1
+                  # Read the body (up to the request_body limit below) before contacting the app, so an
+                  # oversize one is refused here and never reaches it
+                  request_buffers 6MB
               }
+
+              # Just above the app's own limits (5 MB photo, 64 KB JSON), leaving room for multipart
+              # overhead; a bigger body gets a bare 413 here and never reaches the app
+              @photo_upload path /api/photos /api/plants/identify
+              request_body @photo_upload {
+                  max_size 6MB
+              }
+              @other_body not path /api/photos /api/plants/identify
+              request_body @other_body {
+                  max_size 1MB
+              }
+
+              # CSP: the SPA's inline bootstrap scripts change with every build (asset hashes, build
+              # time), so they cannot be pinned by hash from here; everything else is same-origin
+              # except Google Fonts. Images: same-origin photos plus data:/blob: previews.
+              header {
+                  Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+                  X-Content-Type-Options nosniff
+                  Referrer-Policy strict-origin-when-cross-origin
+                  X-Frame-Options DENY
+              }
+              @https protocol https
+              header @https Strict-Transport-Security "max-age=31536000"
           }
           CADDY
 
@@ -196,6 +238,8 @@ Resources:
               echo "SITE_ADDRESS=:80"
               echo "FERNSLOP_PUBLIC_URL=http://${ElasticIp}"
             fi
+            # No Swagger UI, ReDoc or OpenAPI JSON in production
+            echo "FERNSLOP_API_DOCS=0"
           } > .env
 
           echo "=== start ==="

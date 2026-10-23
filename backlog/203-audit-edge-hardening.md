@@ -25,3 +25,19 @@ Caddy refuses oversize bodies and sends security headers, the AWS stack needs a 
 - After #192. At most 2 tests.
 
 **User decision (2026-10-22):** keep the `AllowPlainHttp=true` escape hatch; a domain is required by default.
+
+## Comments
+
+**Engineer:** Implemented on branch `worktree-agent-aa1389b7bc7a30d8f`.
+- `infra/ec2-stack.yaml` Caddyfile: `request_body max_size` 6MB on `/api/photos` and `/api/plants/identify`, 1MB elsewhere. I also added `request_buffers 6MB` to `reverse_proxy`. Without it, Caddy streams the body and the app sees the request before the limit trips (a 1.2 MB JSON got the app's own 413). With it, Caddy refuses the oversize body with a bare 413 before contacting the app, for both Content-Length and chunked bodies. CSP: `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'`. It also sends `nosniff`, `strict-origin-when-cross-origin` and `X-Frame-Options: DENY`, plus HSTS only on HTTPS requests (`@https protocol https`). The SPA has three inline TanStack bootstrap scripts that change with every build (asset hashes, a build timestamp). The template can't know their hashes because the image is built separately, so I allowed them with `'unsafe-inline'` instead of hashes. Styles need `'unsafe-inline'` for the React/Radix style attributes.
+- New `AllowPlainHttp` parameter (default `false`) and a `Rules` assertion: with no `DomainName`, the stack refuses to create with "DomainName is required ... set AllowPlainHttp=true". Updated the description; the `Url` output logic is unchanged. The stack now writes `FERNSLOP_API_DOCS=0` to `.env`.
+- `infra/deploy.sh`: on a first deploy with no domain argument, it asks for one before the build. If none is given, it exits and says to use `ALLOW_PLAIN_HTTP=true infra/deploy.sh` for plain HTTP. On an update, a stack that has no domain gets `AllowPlainHttp=true`, so it still updates.
+- `backend/app/main.py`: `FERNSLOP_API_DOCS=0` turns off docs, redoc and openapi (404). If it is unset, they are served as before.
+- `httpService.ts`: a 413 with no JSON body shows "That photo is over 5 MB" on uploadPhoto and identifyPlant, and the generic error elsewhere.
+- Tests (2): the backend docs flag off gives 404 on all three paths (the existing openapi test covers "on"), and a frontend httpService test covers the bare 413. Backend: 154 passed, 2 skipped, ruff clean. Frontend vitest: 42 passed.
+- Checks: `uvx cfn-lint` clean, and `aws cloudformation validate-template` (read-only) is OK with the `AllowPlainHttp` parameter. I ran the template's Caddyfile in `caddy:2-alpine` (only the upstream port changed) in front of the app built from this branch with `FERNSLOP_API_DOCS=0`. I used my own uvicorn instead of `make up` so I didn't touch the user's stack on :8000. Results:
+  - `/api/docs` and `/api/openapi.json` return 404, and all headers are present.
+  - Oversize bodies of 7 MB (photo) and 1.2 MB (JSON) get a bare 413 that never reaches the app.
+  - A 4.7 MB PNG uploads (201) and identifies (200).
+  - In Playwright, I created a garden, identified a plant from a photo, added one, posted a photo and saw it arrive live in a second browser, and opened `/unsubscribe`. There were 0 CSP violations, Nunito loaded, and the 7 MB photo showed "That photo is over 5 MB" on both identify and post. The only console errors were those deliberate 413s.
+- Merge with #195: I added Caddyfile lines after the `reverse_proxy` block, plus one line inside it after `flush_interval`. I didn't touch compose services or networks.
