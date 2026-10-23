@@ -26,3 +26,5 @@ A workflow started by hand, `.github/workflows/promote.yaml`, deploys to prod th
 - Starts after #229, #234, #235 and #236; the first live run is after #237
 - Decided: no approval gate beyond starting the run by hand, so no required reviewers and no confirm input
 - Agents never write to AWS or start the workflow. QA checks by reading the file and running `actionlint` (brew or the `rhysd/actionlint` image, not `pyproject.toml`)
+
+**Orchestrator decision:** the repo variable `DEV_SITE_URL` is accepted, so no URL is hardcoded. The user restricts the `production` environment to deployments from `main`; [#236](236-env-iam-split-per-environment.md)'s README setup must say so.

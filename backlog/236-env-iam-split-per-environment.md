@@ -25,3 +25,5 @@
 
 - Change only `infra/github-oidc-stack.yaml`, that README section, and the boundary on `InstanceRole` in `infra/ec2-stack.yaml`. Start after #234 is merged, because this work uses its names and tag key and edits the same file
 - Nobody but the user writes to AWS. The engineer and QA may only run `aws cloudformation validate-template`, `aws iam simulate-custom-policy`, and `describe`/`get`/`list` calls. No new dependencies
+
+- [ ] README setup tells the user to restrict the `production` environment to deployments from `main`, and to set the repo variable `DEV_SITE_URL` ([#239](239-env-ci-promote-to-prod.md)).
