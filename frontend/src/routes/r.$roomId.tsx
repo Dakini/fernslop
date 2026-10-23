@@ -113,10 +113,14 @@ function RoomPage() {
 
   async function pick(plant: Plant) {
     setAdding(false);
-    const rp = await svc.addPlant(room.id, plant.id, actor);
-    setFreshId(rp.id);
-    await qc.invalidateQueries({ queryKey: ["room", roomId] });
-    toast.success(`${plant.common_name} planted — drag it into place`);
+    try {
+      const rp = await svc.addPlant(room.id, plant.id, actor);
+      setFreshId(rp.id);
+      await qc.invalidateQueries({ queryKey: ["room", roomId] });
+      toast.success(`${plant.common_name} planted — drag it into place`);
+    } catch (e) {
+      if (!(e instanceof RateLimitError)) toast.error((e as Error).message);
+    }
   }
 
   return (
