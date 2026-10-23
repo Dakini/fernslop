@@ -2,12 +2,14 @@
 
 A success saves the ``post`` event and bumps the room's ``last_activity_at`` in
 one store transaction, then calls ``live.notify`` once after it has ended.
-A room takes at most ``MAX_POSTS_PER_DAY`` posts in any 24 hours; past that, 429.
+A room takes at most ``MAX_POSTS_PER_DAY`` posts in any 24 hours; past that, 429. Of those, at most
+``FERNSLOP_PHOTO_POSTS_PER_DAY`` (default 15) may carry a photo (#222); past that, a photo post gets 429.
 """
 
 import math
+import os
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
@@ -42,16 +44,31 @@ PHOTO_IN_USE_MESSAGE = "That photo is already in a post"
 MAX_POSTS_PER_DAY = 200
 POST_WINDOW = timedelta(hours=24)
 
+# At most this many photo posts per room in any 24 hours (#222), so one garden can't fill the photo store.
+# Undone photo posts count (their bytes stay until the room is purged). Read on each request.
+PHOTO_POSTS_PER_DAY_ENV = "FERNSLOP_PHOTO_POSTS_PER_DAY"
+DEFAULT_PHOTO_POSTS_PER_DAY = 15
 
-def _check_post_cap(store: StoreProtocol, room_id: str, now) -> None:
-    """429 like ``app.rate_limit``, with ``Retry-After`` until the oldest post in the window ages out."""
-    count, oldest = store.count_posts_since(room_id, now - POST_WINDOW)
-    if count < MAX_POSTS_PER_DAY or oldest is None:
+
+def _raise_if_full(count: int, oldest: datetime | None, cap: int, now: datetime) -> None:
+    """429 like ``app.rate_limit``, with ``Retry-After`` until the oldest counted post in the window ages out."""
+    if count < cap or oldest is None:
         return
     retry_after = max(1, math.ceil((oldest + POST_WINDOW - now).total_seconds()))
     raise HTTPException(
         429, TOO_FAST_MESSAGE.format(seconds=retry_after), headers={"Retry-After": str(retry_after)}
     )
+
+
+def _check_post_cap(store: StoreProtocol, room_id: str, now: datetime) -> None:
+    count, oldest = store.count_posts_since(room_id, now - POST_WINDOW)
+    _raise_if_full(count, oldest, MAX_POSTS_PER_DAY, now)
+
+
+def _check_photo_post_cap(store: StoreProtocol, room_id: str, now: datetime) -> None:
+    cap = int(os.environ.get(PHOTO_POSTS_PER_DAY_ENV) or DEFAULT_PHOTO_POSTS_PER_DAY)
+    count, oldest = store.count_photo_posts_since(room_id, now - POST_WINDOW)
+    _raise_if_full(count, oldest, cap, now)
 
 
 @router.post("/rooms/{room_id}/posts", operation_id="postUpdate", status_code=201, dependencies=[rate_limited(WRITE)])
@@ -87,6 +104,7 @@ def post_update(
 
         photo_url = None
         if photo_id is not None:
+            _check_photo_post_cap(store, room_id, now)
             photo = store.get_photo(photo_id)
             if photo is None:
                 raise ApiError(400, BAD_PHOTO_MESSAGE)
