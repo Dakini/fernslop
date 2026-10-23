@@ -3,11 +3,12 @@ import uuid
 
 import pytest
 from fastapi.testclient import TestClient
-from PIL import Image, PngImagePlugin
+from PIL import Image, ImageSequence, PngImagePlugin
 
 from app.main import app
 from app.sql_store import SqlStore
 from app.store import get_store
+from app.uploads import ValidatedImage, strip_metadata
 
 
 def make_image(fmt, size=(2, 2), mode="RGB", **params):
@@ -24,6 +25,14 @@ def camera_exif(orientation=6):
     exif[0x0132] = "2026:05:01 09:30:00"
     exif[0x8825] = {1: "N", 2: (51.0, 30.0, 12.0)}
     return exif
+
+
+def animated_webp(frames, **params):
+    """An animated WebP of ``frames`` shown for 100, 200, 300... ms each, looping 3 times."""
+    out = io.BytesIO()
+    durations = [100 * (i + 1) for i in range(len(frames))]
+    frames[0].save(out, "WEBP", save_all=True, append_images=frames[1:], duration=durations, loop=3, **params)
+    return out.getvalue()
 
 
 def stored_image(api, photo):
@@ -152,20 +161,34 @@ def test_upload_of_png_and_animated_webp_strips_metadata_and_keeps_type_transpar
     text.add_text("Author", "Ada")
     text.add_itxt("Comment", "kitchen window")
     png = make_image("PNG", mode="RGBA", exif=camera_exif(1), pnginfo=text)
-    frames = [Image.new("RGBA", (2, 2), (255, 0, 0, 128)), Image.new("RGBA", (2, 2), "blue")]
-    out = io.BytesIO()
-    frames[0].save(out, "WEBP", save_all=True, append_images=frames[1:], exif=camera_exif(1), xmp=b"<x:xmpmeta/>")
+    colours = [(255, 0, 0, 128), (0, 0, 255, 255), (0, 200, 0, 255)]
+    frames = [Image.new("RGBA", (2, 2), colour) for colour in colours]
+    webp = animated_webp(frames, lossless=True, exif=camera_exif(1), xmp=b"<x:xmpmeta/>")
 
-    stored = [
-        stored_image(api, upload(api, png, "image/png").json()),
-        stored_image(api, upload(api, out.getvalue(), "image/webp").json()),
-    ]
+    stored_webp = api.get(upload(api, webp, "image/webp").json()["url"]).content
+    stored = [stored_image(api, upload(api, png, "image/png").json()), Image.open(io.BytesIO(stored_webp))]
 
     assert [(image.format, image.mode) for image in stored] == [("PNG", "RGBA"), ("WEBP", "RGBA")]
-    assert stored[1].n_frames == 2
     for image in stored:
         assert dict(image.getexif()) == {}
         assert not {"exif", "xmp", "Author", "Comment"} & set(image.info)
+    # Frame timing, loop count and lossless pixels survive the re-encode (#212)
+    stored_frames = [frame.copy() for frame in ImageSequence.Iterator(stored[1])]
+    assert [frame.info["duration"] for frame in stored_frames] == [100, 200, 300]
+    assert stored[1].info["loop"] == 3
+    assert [frame.tobytes() for frame in stored_frames] == [frame.tobytes() for frame in frames]
+    # A second strip (what `python -m app.photo_strip` does) changes nothing
+    assert strip_metadata(ValidatedImage(data=stored_webp, content_type="image/webp", filename=None)) == stored_webp
+
+
+def test_upload_of_lossy_animated_webp_with_exif_stays_lossy(api):
+    frames = [Image.new("RGB", (2, 2), "red"), Image.new("RGB", (2, 2), "blue")]
+    webp = animated_webp(frames, lossless=False, exif=camera_exif(1))
+
+    data = api.get(upload(api, webp, "image/webp").json()["url"]).content
+
+    assert b"VP8L" not in data and b"VP8 " in data
+    assert b"EXIF" not in data
 
 
 # --- Serving -----------------------------------------------------------------
