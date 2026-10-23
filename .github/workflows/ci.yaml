@@ -1,10 +1,10 @@
-# CI: backend and frontend unit tests, as two parallel jobs.
+# CI: backend and frontend unit tests as two parallel jobs, then the `stack` job (compose stack, integration, e2e).
 #
 # Actions are pinned to a full commit SHA, with the release tag in a trailing comment. To bump one, resolve the
 # new tag to its commit, e.g.:
 #   gh api repos/actions/checkout/commits/v7.0.1 --jq .sha
 #
-# Later jobs (stack/e2e, deploy) go in the same `jobs:` map and can `needs: [backend, frontend]`.
+# Later jobs (deploy) go in the same `jobs:` map and can `needs:` the jobs below.
 
 name: CI
 
@@ -69,3 +69,84 @@ jobs:
       - run: npm ci
 
       - run: npm test
+
+  # Builds and starts docker-compose.yaml once, then runs the integration checks (/api/health, backend suite on
+  # the stack's Postgres) and the e2e/ Playwright suite against that one stack. The stack is always torn down.
+  stack:
+    name: Stack integration and e2e tests
+    needs: [backend, frontend]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # .github/ci/compose.ci.yaml only publishes db on 127.0.0.1:55432; plain `docker compose up` is unchanged
+      - name: Start the stack
+        run: docker compose -f docker-compose.yaml -f .github/ci/compose.ci.yaml -p fernslop-ci up -d --build --wait
+
+      - name: Health check
+        run: |
+          for _ in $(seq 1 30); do
+            code=$(curl -sS -o health.json -w '%{http_code}' --max-time 2 http://localhost:8000/api/health || true)
+            if [ "$code" = "200" ] && jq -e '.status == "ok"' health.json > /dev/null 2>&1; then
+              echo "Health OK: $(cat health.json)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Health check failed: last HTTP status ${code:-none}, body:"
+          cat health.json 2>/dev/null || true
+          exit 1
+
+      # A separate database: the test suite wipes the one it is given, so never the app's `fernslop` database
+      - name: Create the test database
+        run: docker compose -f docker-compose.yaml -f .github/ci/compose.ci.yaml -p fernslop-ci exec -T db createdb -U fernslop fernslop_test
+
+      # Same settings as job `backend`
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.13.5"
+          python-version: "3.13"
+          working-directory: backend
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Backend tests on Postgres
+        working-directory: backend
+        env:
+          FERNSLOP_TEST_DATABASE_URL: postgresql+psycopg://fernslop:fernslop@localhost:55432/fernslop_test
+        run: |
+          uv sync --locked
+          uv run pytest | tee "$RUNNER_TEMP/backend-postgres.log"
+          # With the variable set nothing may skip, so the requires_postgres tests really ran
+          if grep -Eq '[0-9]+ skipped' "$RUNNER_TEMP/backend-postgres.log"; then
+            echo "Tests were skipped on Postgres"
+            exit 1
+          fi
+
+      # E2E_BASE_URL makes the suite use this stack instead of starting its own fernslop-e2e stack
+      - name: E2E tests
+        working-directory: e2e
+        env:
+          E2E_BASE_URL: http://localhost:8000
+        run: |
+          uv sync --locked
+          uv run playwright install --with-deps chromium
+          uv run pytest
+
+      - name: Save stack logs
+        if: failure()
+        run: docker compose -f docker-compose.yaml -f .github/ci/compose.ci.yaml -p fernslop-ci logs --no-color > stack-logs.txt 2>&1 || true
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: stack-logs
+          path: stack-logs.txt
+          if-no-files-found: ignore
+
+      - name: Stop the stack
+        if: always()
+        run: docker compose -f docker-compose.yaml -f .github/ci/compose.ci.yaml -p fernslop-ci down --volumes --remove-orphans
