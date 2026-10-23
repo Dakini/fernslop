@@ -8,7 +8,7 @@ Commands
 
 - `uv sync` - install dependencies
 - `uv run pytest` - the whole suite
-- `uv run pytest core/tests.py` - one test file
+- `uv run pytest app/test_posts.py` - one test file (from `backend/`)
 
 regularly commit code to git 
 

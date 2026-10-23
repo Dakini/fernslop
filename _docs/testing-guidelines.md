@@ -1,177 +1,96 @@
 # Testing guidelines
 
 How we write and run tests in this repo. Read this before writing tests, per
-`AGENT.md`.
+`AGENTS.md`. There are three suites:
 
-## Running tests
+| Suite | Where | Tool | Run from |
+|---|---|---|---|
+| Backend | `backend/app/test_*.py` | pytest + FastAPI `TestClient` | `backend/` |
+| Frontend | `frontend/src/**/*.test.ts(x)` | vitest + Testing Library (jsdom) | `frontend/` |
+| End-to-end | `e2e/test_*.py` | pytest + Playwright (Chromium) | `e2e/` |
 
-All commands run from `app/` (where `pyproject.toml` and `pytest.ini` live):
+From the repo root, `make test` (backend), `make test-frontend`, `make test-e2e`
+and `make test-all` run the same commands.
 
-- `uv run pytest` - the whole suite
-- `uv run pytest core/tests.py` - one test file
-- `uv run pytest core/test_auth.py::test_login_success_redirects_to_login_redirect_url` - one test
+## How many tests
 
-Config lives in `app/pytest.ini`:
+Keep tests lean, this is an MVP. `_docs/process.md` sets the budget: at most 5
+tests per issue, at most 2 for small work, none for config or a command. Test
+the happy path and the one failure that matters, not every edge case, bad
+input, or thing the framework already guarantees.
 
-```ini
-[pytest]
-DJANGO_SETTINGS_MODULE = config.settings
-python_files = tests.py test_*.py *_tests.py
-```
+## Rules for every suite
 
-`pytest-django` provides the Django integration (test database creation/
-migration, the `client` fixture, `django_db` marker). It's declared in the
-`dev` dependency group in `app/pyproject.toml` alongside `pytest`.
-
-## Where tests live
-
-Tests live next to the code they test, inside each Django app, not in a
-top-level `tests/` directory:
-
-- `app/core/tests.py`, `app/core/test_auth.py`, `app/core/test_wait_for_db.py`
-- `app/config/tests.py`
-- `app/projects/test_projects.py`
-
-Start with a single `tests.py` per app (see `core/tests.py`). Once an app's
-tests outgrow one file, split by concern into sibling `test_*.py` files in
-the same app directory - e.g. `core/test_auth.py` splits auth tests out of
-`core/tests.py`. This works because `pytest.ini`'s `python_files` matches
-`tests.py`, `test_*.py`, and `*_tests.py`.
-
-If a single app's tests outgrow even a handful of `test_*.py` files, promote
-that app's tests to a `tests/` package (`app/<app>/tests/__init__.py` plus
-`test_*.py` modules inside it) rather than continuing to add flat files.
-No app has needed this yet - do it when it actually gets unwieldy, not
-pre-emptively.
-
-## pytest-django conventions in use
-
-- Mark database-touching test modules with a module-level
-  `pytestmark = pytest.mark.django_db` near the top of the file (see
-  `core/test_auth.py`, `projects/test_projects.py`) rather than decorating
-  every test individually. For a file with only one or two DB tests,
-  decorating the function directly with `@pytest.mark.django_db` is fine
-  (see `core/tests.py`).
-- Use the `client` fixture (function-scoped, provided by `pytest-django`)
-  for anything that goes through Django views/middleware - don't call view
-  functions directly.
-- Use `django.test.Client(enforce_csrf_checks=True)` directly (not the
-  `client` fixture, which disables CSRF checks) when a test needs to assert
-  CSRF enforcement - see `test_post_register_without_csrf_token_is_rejected`.
-- Use `reverse()` for every URL a test needs, including query strings built
-  from it (e.g. `f"{reverse('login')}?next={reverse('dashboard')}"`). Do not
-  hard-code paths, with one accepted exception: the health check endpoint
-  (`/health/`) is asserted as a literal path because it's meant to stay a
-  stable, unnamed, infrastructure-level URL.
-- Build test data with small helper factory functions local to the test
-  module, not fixtures in a shared `conftest.py` (none exists yet) - e.g.
-  `make_user(username=..., password=...)` in `projects/test_projects.py`,
-  `register_payload(**overrides)` in `core/test_auth.py`. Give them sane
-  defaults and accept `**overrides`/keyword args so individual tests only
-  specify what they care about.
-- Assert against `response.context["form"].errors` to check validation
-  failures, not by scraping rendered HTML for error text.
-
-## Test structure and style
-
-- One behavior per test. Test function names are full descriptive sentences:
+- One behaviour per test. Python test names are full sentences:
   `test_<subject>_<condition>_<expected outcome>`, e.g.
-  `test_registration_with_duplicate_username_shows_error_not_500`.
-- Arrange / Act / Assert, separated by blank lines, in that order - no
-  `given`/`when`/`then` comment labels, just the blank-line grouping. Example:
+  `test_invalid_post_is_400_with_message_and_writes_nothing`. Vitest `it(...)`
+  strings read the same way inside a `describe` block.
+- Arrange / Act / Assert, separated by blank lines, in that order, with no
+  `given`/`when`/`then` labels:
 
   ```python
-  def test_login_success_redirects_to_login_redirect_url(client):
-      User.objects.create_user(username="loginuser", email="loginuser@example.com", password=VALID_PASSWORD)
+  def test_health_returns_ok(client):
+      response = client.get("/api/health")
 
-      response = client.post(reverse("login"), {"username": "loginuser", "password": VALID_PASSWORD})
-
-      assert response.status_code == 302
-      assert response.url == reverse("dashboard")
+      assert response.status_code == 200
   ```
 
-- Group related tests within a file under a comment banner, e.g.
-  `# --- Login -----------------------------------------------------------------`.
-  See the `# --- Registration ---`, `# --- Login ---`, `# --- Logout ---`
-  sections in `core/test_auth.py` and the `# --- Model defaults ---`,
-  `# --- Create view: ... ---`, `# --- Detail view ---` sections in
-  `projects/test_projects.py`.
-- Add a short comment when a test's assumption isn't obvious from the code
-  alone, especially when it's deliberately not testing something that looks
-  related - e.g. `# No Membership model exists yet (#5), so there is no
-  notion of this user being a member - the point of this test is that it
-  doesn't matter.` Reference the relevant issue number when the gap is
-  intentional and tracked.
-- Prefer testing observable behavior (status codes, redirect targets, DB
-  state, rendered content, form errors) over implementation details.
-  `core/test_wait_for_db.py` is the one place tests mock internals
-  (`django.db.utils.connections`) because the thing under test is a retry
-  loop around a side-effecting call, not the DB, and there's no other way to
-  observe its behavior.
+- Test observable behaviour (status codes, response bodies, database state,
+  what the user sees on screen), not implementation details. Mock internals
+  only when there is no other way to observe the behaviour, and say why in a
+  comment.
+- Group related tests in a file under a comment banner, e.g.
+  `# --- Validation ---...` in `backend/app/test_posts.py`.
+- Add a short comment when a test's assumption is not obvious, and reference
+  the issue number when a gap is deliberate (e.g. `# --- Daily post cap (#210) ---`).
 
-## What to test for models and views (from #4 onward)
+## Backend (pytest)
 
-Every Django model and view added should get coverage in the app's test
-file(s) for at least:
+Tests live next to the code in `backend/app/`, one `test_<module>.py` per
+module (`test_posts.py` tests `routers/posts.py`, `test_rate_limit.py` tests
+`rate_limit.py`). Config is in `backend/pyproject.toml` under
+`[tool.pytest.ini_options]` (`testpaths = ["app"]`, `pythonpath = ["."]`).
 
-**Models**
+Run from `backend/`:
 
-- Field defaults (e.g. `test_project_defaults_to_friday_5pm_deadline_rule`).
-- Any documented business rule encoded as a default or constraint (or the
-  explicit absence of one, e.g.
-  `test_two_projects_with_the_same_name_can_coexist` confirming there's no
-  uniqueness constraint on `name`).
+```bash
+uv run pytest                                          # the whole suite
+uv run pytest app/test_posts.py                        # one file
+uv run pytest app/test_main.py::test_health_returns_ok # one test
+```
 
-**Views**
+### Fixtures in `backend/conftest.py`
 
-- Auth gating: anonymous `GET` and `POST` are redirected to `login` with the
-  correct `?next=` when a view is `@login_required`; anonymous `POST` must
-  not create data.
-- Happy path: a signed-in user can reach the form (`GET`) and successfully
-  submit it (`POST`), including the redirect target and any resulting DB
-  state.
-- Validation: at minimum, blank/whitespace-only required fields and
-  boundary-length fields (one over the max, exactly at the max) are rejected
-  with a form error and no DB write - never a 500 or a raw DB exception.
-  CSRF is enforced on `POST` (see the `enforce_csrf_checks=True` pattern
-  above).
-- Not-found handling: an unknown object id returns 404, not a crash.
-- Anything explicitly out of scope for the current issue but adjacent (e.g.
-  membership checks before #6 exists) should have a test asserting today's
-  actual behavior, with a comment explaining what's deliberately not
-  checked yet and which issue will add it.
+This is the one shared `conftest.py`. It defines:
 
-When in doubt, match the density and style already in `core/test_auth.py`
-and `projects/test_projects.py` rather than inventing a new pattern.
+- `reset_store` (autouse, function-scoped): sets `FERNSLOP_DATABASE_URL` to an
+  in-memory SQLite database (`sqlite://`) and closes cached stores before and
+  after every test, so each test gets a fresh, seeded database and
+  `./fernslop.db` is never touched.
+- `reset_rate_limit` (autouse): every test starts with empty rate-limit counts
+  and the default limits.
+- `client`: a `fastapi.testclient.TestClient(app)` on that fresh store. Go
+  through it rather than calling route functions directly, and use literal
+  paths including the `/api` prefix (`client.get("/api/health")`).
 
+A test that needs direct access to its store builds `SqlStore("sqlite://")`
+and injects it with `app.dependency_overrides[get_store]`, removing the
+override afterwards. See the `store` and `api` fixtures at the top of
+`backend/app/test_posts.py`. Test-data helpers (`make_jpeg()`,
+`post(api, room_id, body)`, ...) and fixtures used by only one file stay in
+that test module.
 
-## FastAPI backend adaptation (`backend/`)
+### Asserting errors
 
-The sections above describe the Django setup. The FastAPI backend in
-`backend/` follows the same style with these changes:
+Errors are `{"message": ...}` bodies. Assert the status code and the message:
 
-- Run from `backend/`: `uv run pytest`, or `uv run pytest app/test_main.py`.
-  Config is in `backend/pyproject.toml` under `[tool.pytest.ini_options]`, not
-  `pytest.ini`. There is no `pytest-django`, no database and no `django_db`
-  marker.
-- Use a `client` fixture built on `fastapi.testclient.TestClient` (needs
-  `httpx`). Do not call route functions directly. There is no `reverse()`, so
-  assert literal paths including the `/api` prefix.
-- The store is a SQLAlchemy database chosen by `FERNSLOP_DATABASE_URL`.
-  `backend/conftest.py` defines an autouse, function-scoped `reset_store`
-  fixture that points that variable at an in-memory SQLite database
-  (`sqlite://`) and drops the cached `get_store()` store before and after every
-  test, so each test gets a fresh seeded database and `./fernslop.db` is never
-  touched, plus the `client` fixture. This is the one shared `conftest.py`;
-  test-data factories still live in each test module. A test that needs its
-  own store builds `SqlStore("sqlite://")` (or a `tmp_path` file URL when it
-  needs a restart or threads) and injects it with
-  `app.dependency_overrides[get_store]`.
-- Errors are `{"message": ...}` bodies, not forms. Assert the status code and
-  `response.json()["message"]` where the Django rules say to check
-  `form.errors`. Validation failures are 400 (422 only for `markCare`).
-- Naming, Arrange/Act/Assert, section banners and "test observable
-  behaviour" apply unchanged. Tests live next to the code in `backend/app/`.
+```python
+assert response.status_code == 400
+assert response.json()["message"] == "Write something or add a photo"
+```
+
+Validation failures are 400 (`app/errors.py`). 422 is used only for
+`markCare`. When a request is rejected, also assert that nothing was written.
 
 ### Running the backend suite on Postgres
 
@@ -189,6 +108,77 @@ docker stop fernslop-pg
 With it set, `conftest.py` empties that database before every test (`DROP
 SCHEMA public CASCADE`) and points both `FERNSLOP_DATABASE_URL` and every
 `SqlStore("sqlite://")` a test builds at it. The test database is wiped, so
-never point it at data you care about. Tests that only make sense on Postgres
-carry the `requires_postgres` marker from `conftest.py` and are skipped when
-the variable is unset.
+never point it at data you care about, and never at the `docker compose`
+stack's database. Tests that only make sense on Postgres carry the
+`requires_postgres` marker from `conftest.py`
+(`from conftest import requires_postgres`, see `app/test_sql_store.py`) and
+are skipped when the variable is unset.
+
+## Frontend (vitest)
+
+Run from `frontend/` (after `npm install`):
+
+```bash
+npm test                                   # vitest run, the whole suite
+npx vitest run src/lib/image.test.ts       # one file
+npx vitest run -t "returns null for an unknown room"  # tests whose name matches
+npm run test:watch                         # watch mode
+```
+
+Config is `frontend/vitest.config.ts`: the `jsdom` environment, vitest globals,
+`VITE_USE_MOCK=true` so `getServices()` returns the in-browser mock service
+instead of HTTP, the `@/` alias for `src/`, and the setup file
+`src/test/setup.ts` (jest-dom matchers, stubs for `window.scrollTo` and
+`window.matchMedia`).
+
+Test files match `src/**/*.test.ts(x)`:
+
+- Unit tests sit next to the module: `src/lib/image.test.ts`,
+  `src/services/mock/mockService.test.ts`,
+  `src/components/garden/DeleteGardenDialog.test.tsx`.
+- Page and routing tests live in `src/test/` (`app-routing.test.tsx`,
+  `confirm-follow.test.tsx`, ...).
+
+Testing against the mock service:
+
+- Service logic: build a mock directly with
+  `createMockService({ storage: memoryStorage(), seed: false, now: () => ... })`
+  and call it (see `setup()` in `mockService.test.ts`).
+- Components and pages: inject a service with `setServices(...)` from
+  `@/services`, passing only the methods the test needs as `vi.fn()`s, and
+  reset with `afterEach(() => setServices(null))` (see
+  `src/test/confirm-follow.test.tsx`). Assert what the user sees with
+  Testing Library queries (`screen.findByText(...)`).
+- The HTTP service (`src/services/http/httpService.test.ts`) is tested
+  against a stubbed `fetch`, never a running backend.
+
+## End-to-end (Playwright)
+
+Browser tests in `e2e/` run against the real `docker-compose.yaml` stack
+(Postgres plus the app serving the built frontend). Run from `e2e/`:
+
+```bash
+uv sync
+uv run pytest
+```
+
+The suite starts its own stack under the compose project `fernslop-e2e` on a
+free port and removes it afterwards, so a stack you run by hand is not
+touched. Set `E2E_BASE_URL` to test an already running stack instead. See
+[`e2e/README.md`](../e2e/README.md) for the other variables, installing
+Chromium and what each test covers. Add an e2e test only for a flow that
+needs a real browser and backend together (live updates across two
+gardeners, photo upload); everything else belongs in the backend or
+frontend suite.
+
+## Lint
+
+Run ruff from the repo root before committing:
+
+```bash
+uvx ruff check .
+```
+
+It checks every Python file in the repo (`backend/`, `e2e/`). Files in
+`backend/` use `[tool.ruff]` in `backend/pyproject.toml`; the rest use
+ruff's defaults. The frontend has its own `npm run lint` (eslint).
