@@ -113,8 +113,9 @@ function retyped(file: File, type: string): File {
 
 /**
  * A still JPEG, PNG or WebP over 1 MB and over 2048 px is resized to 2048 px on its longest side
- * (JPEG stays JPEG; PNG/WebP keep transparency). Anything else, anything the browser cannot
- * decode or encode, and any result that is not smaller comes back unchanged.
+ * (JPEG stays JPEG; PNG stays PNG; WebP stays WebP where the browser can encode it, else an
+ * opaque WebP becomes JPEG and one with transparency PNG). Anything else, anything the browser
+ * cannot decode or encode, and any result that is not smaller comes back unchanged.
  */
 async function resizeImage(file: File): Promise<File> {
   if (file.size <= RESIZE_OVER_BYTES || typeof createImageBitmap !== "function")
@@ -124,10 +125,15 @@ async function resizeImage(file: File): Promise<File> {
     const target = resizeTarget(readImageInfo(header, file.type), file.size);
     if (!target) return file;
 
+    // Without WebP encoding, an opaque WebP falls back to JPEG (#218), one with alpha to PNG.
+    const fallback =
+      file.type === "image/webp" && !webpHasAlpha(header)
+        ? "image/jpeg"
+        : "image/png";
     const bitmap = await decode(file, target);
     let blob: Blob | null;
     try {
-      blob = await encode(bitmap, target, file.type);
+      blob = await encode(bitmap, target, file.type, fallback);
     } finally {
       bitmap.close();
     }
@@ -163,6 +169,7 @@ async function encode(
   bitmap: ImageBitmap,
   target: { width: number; height: number },
   type: string,
+  fallback: string,
 ): Promise<Blob | null> {
   const canvas = document.createElement("canvas");
   canvas.width = target.width;
@@ -174,10 +181,14 @@ async function encode(
   const toBlob = (t: string, q?: number) =>
     new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, t, q));
   try {
-    if (type === "image/jpeg") return await toBlob(type, JPEG_QUALITY);
-    // A browser that cannot encode WebP returns PNG, which keeps the transparency too.
-    const blob = await toBlob(type);
-    return blob && (blob.type === type ? blob : await toBlob("image/png"));
+    const quality = (t: string) =>
+      t === "image/jpeg" ? JPEG_QUALITY : undefined;
+    const blob = await toBlob(type, quality(type));
+    // A browser that cannot encode WebP returns PNG; re-encode as the fallback type.
+    return (
+      blob &&
+      (blob.type === type ? blob : await toBlob(fallback, quality(fallback)))
+    );
   } finally {
     canvas.width = canvas.height = 0; // free the pixels now rather than at the next GC
   }
@@ -248,6 +259,19 @@ function readWebp(b: Uint8Array): ImageInfo | null {
     i = d + len + (len & 1);
   }
   return size && { ...size, animated };
+}
+
+/**
+ * Whether a WebP header says the image has transparency: the VP8X alpha flag, or the VP8L
+ * alpha_is_used bit. A plain lossy VP8 image has none. Read from the header, not the pixels.
+ */
+export function webpHasAlpha(b: Uint8Array): boolean {
+  if (ascii(b, 0, 4) !== "RIFF" || ascii(b, 8, 4) !== "WEBP") return false;
+  const fourcc = ascii(b, 12, 4);
+  if (fourcc === "VP8X") return (b[20]! & 0x10) !== 0;
+  // VP8L: signature byte, then 14-bit width, 14-bit height and the alpha bit.
+  if (fourcc === "VP8L") return ((u32le(b, 21) >>> 28) & 1) !== 0;
+  return false;
 }
 
 function readJpeg(b: Uint8Array): ImageInfo | null {
