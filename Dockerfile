@@ -1,7 +1,12 @@
 # syntax=docker/dockerfile:1
 
+# Base images are pinned by their multi-arch index digest (tag@sha256:...), so a rebuild uses the same bytes on
+# amd64 and arm64. To bump one, read the new index digest and replace it here (and for postgres/caddy in
+# infra/ec2-stack.yaml):
+#   docker buildx imagetools inspect node:24-slim | grep -m1 Digest
+
 # --- Stage 1: build the frontend as a static SPA ------------------------------
-FROM node:24-slim AS frontend
+FROM node:24-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205 AS frontend
 WORKDIR /frontend
 
 COPY frontend/package.json frontend/package-lock.json ./
@@ -13,8 +18,8 @@ COPY frontend/ ./
 RUN FERNSLOP_STATIC=1 npm run build
 
 # --- Stage 2: Python backend + built frontend ---------------------------------
-FROM python:3.13-slim AS runtime
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+FROM python:3.13-slim@sha256:57b29a7c050c4e679e4bea572e14b3965cf4b5839de2da49d55e49ffc4024f39 AS runtime
+COPY --from=ghcr.io/astral-sh/uv:0.13.5@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf5661b302bf6f06abda8deca6ff /uv /usr/local/bin/uv
 
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
@@ -25,8 +30,12 @@ ENV UV_COMPILE_BYTECODE=1 \
 WORKDIR /app
 
 COPY backend/pyproject.toml backend/uv.lock ./
-RUN uv sync --frozen --no-dev
+# Also drop the test modules some packages ship (SQLAlchemy's testing suite, certifi, annotated_types); the app
+# never imports them, and the image is meant to hold no test_*.py or conftest.py at all.
+RUN uv sync --frozen --no-dev \
+    && find /app/.venv -type f \( -name 'test_*' -o -name 'conftest.py' \) -delete
 
+# .dockerignore keeps test_*.py and conftest.py out, so the image holds no tests
 COPY backend/app ./app
 COPY --from=frontend /frontend/dist/client ./static
 

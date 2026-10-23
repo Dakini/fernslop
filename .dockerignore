@@ -12,3 +12,6 @@ frontend/dist
 frontend/.output
 backend/*.db
 backend/*.db-*
+# Tests stay out of the production image
+**/test_*.py
+**/conftest.py

@@ -44,7 +44,7 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.engine import make_url
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import NullPool, StaticPool
 
 from app import timestamps
 from app.models import (
@@ -128,11 +128,8 @@ def _make_engine(url: str) -> Engine:
 
     options: dict = {"connect_args": {"check_same_thread": False, "timeout": 30}}
     if parsed.database in (None, "", ":memory:"):
-        # One shared connection, so every method sees the same in-memory database. No rollback when it goes
-        # back to the pool: ping() returns it while another thread may be inside a transaction on it, and
-        # every transaction() ends with its own commit or rollback anyway.
+        # One shared connection, so every method sees the same in-memory database.
         options["poolclass"] = StaticPool
-        options["pool_reset_on_return"] = None
     engine = create_engine(url, **options)
 
     @event.listens_for(engine, "connect")
@@ -165,6 +162,21 @@ def _make_postgres_engine(url: str) -> Engine:
     return engine
 
 
+def _make_ping_engine(url: str) -> Engine:
+    """A bare engine for ``SqlStore.ping``: no pool, no lock-taking ``begin`` hook, timeouts on PostgreSQL.
+
+    Every ping opens a fresh connection, so libpq's ``connect_timeout`` bounds the whole handshake even when the
+    server accepts the TCP connection but never answers (a pooled connection would wait on it forever).
+    """
+    connect_args: dict = {}
+    if make_url(url).get_backend_name() == "postgresql":
+        connect_args = {
+            "connect_timeout": PING_TIMEOUT_SECONDS,
+            "options": f"-c statement_timeout={PING_TIMEOUT_SECONDS * 1000}",
+        }
+    return create_engine(url, poolclass=NullPool, connect_args=connect_args)
+
+
 def _stamp(value: datetime) -> str:
     # Same form the API uses: fixed width, UTC, so strings sort like the times.
     return timestamps.format_timestamp(value)
@@ -181,6 +193,7 @@ class SqlStore:
         self._lock = threading.RLock()
         self._conn: Connection | None = None  # the open transaction's connection, if any
         self._engine = _make_engine(url)
+        self._ping_engine = _make_ping_engine(url)
         with self._tx() as conn:
             _metadata.create_all(conn)
             if seed and conn.execute(select(_meta.c.key).where(_meta.c.key == "seeded")).first() is None:
@@ -189,25 +202,19 @@ class SqlStore:
     def dispose(self) -> None:
         """Close the pooled connections. The store must not be used afterwards."""
         self._engine.dispose()
+        self._ping_engine.dispose()
 
     # --- Housekeeping -----------------------------------------------------------
 
     def ping(self) -> None:
         """Run ``SELECT 1``; raises when the database does not answer within a few seconds.
 
-        Takes neither the store lock nor PostgreSQL's advisory lock: it runs on a raw driver connection from
-        the pool, which fires no SQLAlchemy ``begin`` event, so a long transaction cannot stall it.
+        Takes neither the store lock nor PostgreSQL's advisory lock (nor SQLite's write lock): it runs on its
+        own short-lived connection from an engine without the lock hooks, so a long transaction cannot stall it.
+        On in-memory SQLite that connection sees a separate, empty database, which is fine for ``SELECT 1``.
         """
-        conn = self._engine.raw_connection()
-        try:
-            cursor = conn.cursor()
-            if self._engine.dialect.name == "postgresql":
-                cursor.execute(f"SET LOCAL statement_timeout = {PING_TIMEOUT_SECONDS * 1000}")
-            cursor.execute("SELECT 1")
-            cursor.fetchone()
-            cursor.close()
-        finally:
-            conn.close()  # back to the pool, which rolls back the driver's implicit transaction (PostgreSQL)
+        with self._ping_engine.connect() as conn:
+            conn.exec_driver_sql("SELECT 1").scalar_one()
 
     def transaction(self) -> AbstractContextManager[None]:
         """Exclusive and atomic: an exception rolls back every write in the block. Re-entrant.
