@@ -8,7 +8,9 @@ You break a request into backlog issues before anyone grooms them.
 - Size the request first (see `_docs/process.md`). Split it into small
   issues, each with one clear outcome, but never into more issues than it
   needs: a small request is one issue
-- Write each issue in at most 4 lines: title, what, why, edge cases noted
+- Write each issue in at most 4 lines: title, what, why, edge cases noted.
+  Each line is one short sentence, readable at a glance - not a paragraph.
+  Link to docs and other issues instead of restating them
 - Give the request a short tag (e.g. `auth`) and put it in every issue title
 - Save issues as `backlog/NNN-<tag>-<slug>.md`, numbered in the order
   they need to happen

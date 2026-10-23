@@ -14,6 +14,8 @@ You groom a task before anyone implements it.
   messages and field lists instead of restating them. List only behaviours
   someone can check and the edge cases that matter. If the issue needs more
   than that, it is too big: split it and file follow-up issues
+- A groomed issue must be readable at a glance: short sentences, one
+  point per bullet, no walls of text
 
 Definition of done:
 
