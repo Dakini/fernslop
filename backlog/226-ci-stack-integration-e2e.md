@@ -16,7 +16,7 @@ A `stack` job in `.github/workflows/ci.yaml` builds and starts `docker-compose.y
 
 ## Out of scope
 
-- Playwright traces and screenshots as artifacts. The suite records none today (`e2e/conftest.py` does not use pytest-playwright), so adding them means changing e2e code. This needs a follow-up issue, which has not been filed yet (see open questions)
+- Playwright traces and screenshots as artifacts. The suite records none today (`e2e/conftest.py` does not use pytest-playwright), so adding them means changing e2e code. Moved to [parked/232-ci-e2e-failure-traces.md](parked/232-ci-e2e-failure-traces.md)
 - Building or testing the arm64 production image. CI runners build amd64 from the same multi-arch base digests in `Dockerfile`; arm64 is #228's concern
 - Deploy: #228. Required status checks: [#231](parked/231-ci-required-status-checks.md)
 
