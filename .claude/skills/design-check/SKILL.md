@@ -14,8 +14,8 @@ Used by QA (verdict against an issue's acceptance criteria) and by a designer (w
 
 ## 1. Know what "aligned" means here
 
-- Tokens and fonts live in `frontend/src/styles.css` (`--moss`, `--oat`, `--font-display`, ...) and the shared components in `frontend/src/components/ui/`. Those are the source of truth for the React frontend.
-- `_docs/design-system.md` still describes the older Django-template approach. Read it for the UI rules that still apply, but where it contradicts the real frontend, say so in your report instead of silently picking one.
+- Read `_docs/design-system.md` first. It describes the React, Tailwind and shadcn frontend: tokens, components and layout rules.
+- Tokens and fonts live in `frontend/src/styles.css` (`--moss`, `--oat`, `--font-display`, ...) and the shared components in `frontend/src/components/ui/`. Those are the source of truth; the doc itself says the code wins. Where the doc and the code disagree, say so in your report instead of silently picking one.
 - If the task touches a UI, read the issue's acceptance criteria first and check each one visually as well.
 
 ## 2. Run the app
