@@ -11,6 +11,10 @@
 # stack's DomainName. ALLOW_PLAIN_HTTP=true creates a plain-HTTP stack with no domain.
 # A first deploy boots <tag>. An update keeps the stack's ImageTag (what a replaced instance would boot) and
 # runs the tag through the SSM document instead.
+# EIP_ALLOCATION_ID=eipalloc-... and EIP_ADDRESS=<its IPv4 address> (both or neither) make a new stack use that
+# existing Elastic IP instead of creating one (the stack's ExistingEipAllocationId and ExistingEipAddress). Like
+# DOMAIN they apply only on the first deploy: an existing stack keeps what it has, and they are ignored with a note.
+# The address is not looked up, so it must be the allocation's own. The IP stays outside the stack.
 # CFN_ROLE_ARN=<arn> runs the stack updates as that CloudFormation service role.
 set -euo pipefail
 
@@ -33,6 +37,24 @@ if [ "$ENVIRONMENT" = prod ]; then NAME="prod-$PREFIX"; else NAME="$PREFIX"; fi
 STACK="$NAME"            # ec2-stack.yaml; also the dashboard name and the instance's Name tag
 ECR_STACK="$PREFIX-ecr"  # ecr-stack.yaml, shared by both environments; deployed by hand, never here
 LOG_GROUP="/$NAME/app"
+EIP_ALLOCATION_ID="${EIP_ALLOCATION_ID:-}"
+EIP_ADDRESS="${EIP_ADDRESS:-}"
+if [ -n "$EIP_ALLOCATION_ID$EIP_ADDRESS" ]; then
+  # Same patterns as the template's parameters; checked before any AWS call
+  if [ -z "$EIP_ALLOCATION_ID" ] || [ -z "$EIP_ADDRESS" ]; then
+    echo "EIP_ALLOCATION_ID and EIP_ADDRESS go together: set both or neither" >&2
+    exit 1
+  fi
+  if ! [[ "$EIP_ALLOCATION_ID" =~ ^eipalloc-[0-9a-f]+$ ]]; then
+    echo "EIP_ALLOCATION_ID '$EIP_ALLOCATION_ID' must look like eipalloc-0123456789abcdef0" >&2
+    exit 1
+  fi
+  OCTET='(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])'
+  if ! [[ "$EIP_ADDRESS" =~ ^$OCTET\.$OCTET\.$OCTET\.$OCTET$ ]]; then
+    echo "EIP_ADDRESS '$EIP_ADDRESS' must be an IPv4 address such as 203.0.113.10" >&2
+    exit 1
+  fi
+fi
 
 if [ "${2:-}" = "--names" ]; then
   cat <<EOF
@@ -45,6 +67,11 @@ dashboard    $NAME
 instance tag Name=$NAME
 deploy doc   $STACK-deploy
 EOF
+  if [ -n "$EIP_ALLOCATION_ID" ]; then
+    echo "elastic ip   $EIP_ADDRESS ($EIP_ALLOCATION_ID, existing; used when the stack is created)"
+  else
+    echo "elastic ip   created by the stack"
+  fi
   exit 0
 fi
 TAG="${2:-}"
@@ -101,6 +128,9 @@ if [ "$STACK_EXISTS" = true ]; then
   if [ -z "$OLD_TAG" ]; then
     echo "Stack $STACK has no ImageTag yet: run the one-time steps in infra/README.md (build and deploy by tag) first" >&2
     exit 1
+  fi
+  if [ -n "$EIP_ALLOCATION_ID" ]; then
+    echo "Note: stack $STACK exists, so EIP_ALLOCATION_ID and EIP_ADDRESS are ignored (they apply only on creation)" >&2
   fi
 elif [ -z "$DOMAIN_ARG" ] && [ "$PLAIN" != "true" ]; then
   read -r -p "Domain name for the site (served over HTTPS; you point its DNS at the instance after): " DOMAIN_ARG || true
@@ -161,6 +191,7 @@ else
     --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset \
     --parameter-overrides AppPrefix="$PREFIX" Environment="$ENVIRONMENT" ImageTag="$TAG" \
       DomainName="$DOMAIN_ARG" AllowPlainHttp="$PLAIN" \
+      ${EIP_ALLOCATION_ID:+ExistingEipAllocationId="$EIP_ALLOCATION_ID" ExistingEipAddress="$EIP_ADDRESS"} \
     ${CFN_ROLE_ARN:+--role-arn "$CFN_ROLE_ARN"}
 fi
 
