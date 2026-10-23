@@ -216,6 +216,33 @@ Do this once, after the section above, with operator credentials, from the repo 
 
    Later deploys are `TAG=$(infra/build.sh)` and `infra/deploy.sh dev "$TAG"`; CI does the same through the document ([#238](../backlog/238-env-ci-build-and-deploy-dev.md)).
 
+## CI: build and deploy to dev
+
+`.github/workflows/ci.yaml` runs the tests on every push and pull request. On a push to `main`, once `backend`, `frontend` and `stack` pass, two more jobs run:
+
+1. **`build-and-push`** assumes the ECR push role (`ECR_PUSH_ROLE_ARN`) and runs `infra/build.sh` once. It builds for arm64 (QEMU and buildx) and pushes `<repo>:<tag>`, skipping the push if the tag is already in ECR. The tag is its job output. Nothing else builds or pushes.
+2. **`deploy-dev`** (GitHub environment `development`) assumes the dev deploy role and sends the stack's SSM document (`DEPLOY_DOCUMENT`) to the instance (`INSTANCE_ID`) with that tag, then waits for it. Then it polls `PUBLIC_URL/api/health` for about 2 minutes until it returns 200 with `version` equal to the tag, and runs a read-only smoke test: `GET /` returns HTML and `GET /api/plants` returns a non-empty JSON array. Only after all of that does it move the git tag `deployed-dev` to the commit (`git tag -f` and a forced push, with the job's own token; this is the only job with `contents: write`). A failed deploy, health check or smoke test leaves the tag where it was. Nothing is rolled back.
+
+No CI job calls CloudFormation or `deploy.sh`; creating or changing a stack stays with the operator. A newer push can replace a queued `main` run, so not every commit reaches dev.
+
+Variables (GitHub repository settings, Variables):
+
+| Where | Variable | Value |
+| --- | --- | --- |
+| repository | `ECR_PUSH_ROLE_ARN` | `fernslop-ecr` output `EcrPushRoleArn` |
+| repository | `AWS_REGION` | the region of the stacks, e.g. `eu-west-2` |
+| repository, optional | `ECR_REPOSITORY_URI` | `fernslop-ecr` output `RepositoryUri`; without it `build.sh` derives the repository from the account |
+| `development` environment | `AWS_DEPLOY_ROLE_ARN` | the development deploy role of the `fernslop-github` stack ([#236](../backlog/236-env-iam-split-per-environment.md)) |
+| `development` environment | `INSTANCE_ID` | the dev instance, e.g. `i-0123456789abcdef0` (stack output `InstanceId`) |
+| `development` environment | `DEPLOY_DOCUMENT` | `fernslop-deploy` (stack output `DeployDocumentName`) |
+| `development` environment | `PUBLIC_URL` | `https://<DomainName>`, no path (stack output `Url`) |
+
+`deploy-dev` stops with one line, before any AWS call, if any of `AWS_DEPLOY_ROLE_ARN`, `AWS_REGION`, `INSTANCE_ID`, `DEPLOY_DOCUMENT` or `PUBLIC_URL` is empty. `AWS_REGION` is read from the repository unless the `development` environment sets its own.
+
+**Rerunning only a failed `deploy-dev`** ("Re-run failed jobs") reuses the tag that `build-and-push` produced in that run: it does not build again, and it deploys that run's commit even if `main` has moved on. To deploy a newer commit, push it. If `build-and-push` itself failed, rerunning it is safe, because `build.sh` skips a tag that is already in ECR.
+
+Actions are pinned to a full commit SHA with the release tag in a comment (`aws-actions/configure-aws-credentials` is `v6.3.0`, shared with the prod workflow). Check a change to the workflow with `actionlint`, for example `uvx --with shellcheck-py --from actionlint-py actionlint`.
+
 ## GitHub Actions deploy role (one-time setup)
 
 `github-oidc-stack.yaml` (stack `fernslop-github`) lets GitHub Actions run `deploy.sh` without long-lived AWS keys. It creates two roles:
