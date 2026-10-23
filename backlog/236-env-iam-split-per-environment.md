@@ -1,29 +1,25 @@
-# [env] Split the GitHub and CloudFormation roles per environment
+# [env] One deploy role per GitHub environment
 
 ## Goal
 
-`infra/github-oidc-stack.yaml`, deployed once per environment, gives dev and prod their own deploy and CloudFormation roles that cannot reach the other environment, closes items 1 and 3 of [#233](parked/233-ci-deploy-iam-hardening.md), and lets only the prod role run the manual promotion (#239). The user applies it live.
+`infra/github-oidc-stack.yaml` (live stack `fernslop-github`) holds one deploy role for `development` and one for `production`. Each role trusts only its own GitHub environment and can only send its own SSM deploy document ([#235](235-env-build-and-deploy-by-tag.md)) to its own instance. CI no longer uses CloudFormation, so there is no CloudFormation role and no permissions boundary. The user applies it live.
 
 ## Acceptance criteria
 
-- [ ] The template takes #234's prefix and environment (`dev`/`prod`). With dev values, the live `fernslop-github` stack keeps every logical ID and every property that would force a replacement, so its role ARNs stay valid. The OIDC provider gets `DeletionPolicy: Retain`
-- [ ] The dev deploy role trusts only `repo:<repo>:ref:refs/heads/main`. The prod deploy role trusts only `repo:<repo>:environment:production`. `TrustSubject` is removed
-- [ ] `aws iam simulate-custom-policy` on one environment's two role policies, run against the other environment's ARNs (stacks, roles, instance profile, backup bucket, log group, alarms, dashboard and its github stack), returns only denies. Each deploy role has `ssm:GetParameter` and `ssm:PutParameter` on its own `/<stack name>/deployed-tag` (#235) and no other parameter. The one cross-environment exception is that the prod deploy role can `GetParameter` dev's
-- [ ] EC2 actions that change resources need the role's own environment tag on the resource and on the create request, and that tag can never be set to another value or removed. The deploy role's `ssm:SendCommand` reaches only instances carrying its own environment tag. Simulated: dev SendCommand, TerminateInstances and CreateTags against a prod-tagged instance are denied
-- [ ] Each stack creates a permissions-boundary policy that allows only what `InstanceRole` uses today, plus `ssm:GetParameter` on its own `deployed-tag` parameter (#235). The CloudFormation role can create or change a role only when that boundary is attached, and cannot remove the boundary or edit it. `ec2-stack.yaml` sets the boundary on `InstanceRole` without replacing it
-- [ ] Only the dev deploy role can upload image layers to the shared `fernslop` repo. The prod deploy role has `ecr:DescribeImages`, `ecr:BatchGetImage` and `ecr:PutImage`, so it can add `prod-<tag>` to an existing image, but it has no layer-upload actions. IAM cannot limit which tag is written, and the README says so. Neither role can change the `fernslop-ecr` stack, so a CI run can't delete prod's images
-- [ ] The "GitHub Actions deploy role" section of `infra/README.md` gives the user the order to run things in: update `fernslop-github` through a change set and check that it shows no `Replacement`, create the prod stack with `CreateOidcProvider=false`, then update the ec2 stacks. It also says where the ARNs go: repo variables for dev, and variables with the same names on the `production` environment for prod. If those are missing, the prod job falls back to dev's ARNs, which cannot be assumed
+- [ ] `CloudFormationRole`, `DeployRole` and `TrustSubject` are gone. The template has `DevelopmentDeployRole` and `ProductionDeployRole`, takes `AppPrefix` (same pattern as [#234](done/234-env-parameterise-stacks.md)), and outputs both ARNs. `aws cloudformation validate-template` and `uvx cfn-lint` pass
+- [ ] `GitHubOidcProvider` keeps its logical ID and has `DeletionPolicy: Retain` and `UpdateReplacePolicy: Retain`, so deleting the stack or an update leaves the account's provider in place. The provider's change-set row is not `Remove` or `Replacement`
+- [ ] Each trust policy allows `sts:AssumeRoleWithWebIdentity` with `aud` = `sts.amazonaws.com` and `sub` exactly `repo:<GitHubRepo>:environment:development` or `...:environment:production`. No wildcard, no `ref:refs/heads/main` subject
+- [ ] Each role's only actions are `ssm:SendCommand` and `ssm:GetCommandInvocation`/`ssm:ListCommandInvocations`. `SendCommand` is allowed on document `<stack name>-deploy` (`fernslop-deploy`, `prod-fernslop-deploy`) and on instances whose `ssm:resourceTag/Name` equals the stack name (`fernslop`, `prod-fernslop`). Read it in the template. No `cloudformation:`, `ecr:`, `s3:`, `iam:` or `ec2:` action
+- [ ] `aws iam simulate-custom-policy` on the dev role's policy allows `SendCommand` on `fernslop-deploy` with an instance tagged `Name=fernslop`. It denies `prod-fernslop-deploy`, `AWS-RunShellScript`, an instance tagged `Name=prod-fernslop`, `ecr:PutImage`, `cloudformation:ExecuteChangeSet`, `iam:PassRole` and `s3:GetObject`. The prod role mirrors this (allows its own, denies dev's)
+- [ ] The "GitHub Actions deploy role" section of `infra/README.md` is rewritten for this stack. In order, it has the user: create a change set for `fernslop-github` and check that the provider is untouched and the two old roles are removed; execute it (the old CI deploy stops until [#238](238-env-ci-build-and-deploy-dev.md)); create the GitHub environments `development` and `production`; restrict `production` to deployments from `main`; set `AWS_DEPLOY_ROLE_ARN`, `AWS_REGION`, `INSTANCE_ID`, `DEPLOY_DOCUMENT` and `PUBLIC_URL` on each environment. Prod's values wait for [#237](237-env-prod-stack-and-cutover.md)
+- [ ] The README also says that the ECR push role is in `ecr-stack.yaml` ([#235](235-env-build-and-deploy-by-tag.md)) and reuses this stack's provider. It says what a deploy role can do (run the one document with a tag matching `allowedPattern`) and that CloudFormation changes stay manual with operator credentials
 
 ## Out of scope
 
-- #233 item 2 (the backup bucket policy, and root on the instance reaching the bucket) stays in [#233](parked/233-ci-deploy-iam-hardening.md). Item 4 is in [#238](238-env-ci-build-and-deploy-dev.md)
-- The instance role's own read of its `deployed-tag` parameter: [#235](235-env-build-and-deploy-by-tag.md)
-- Stack names, resource names and the environment tag: [#234](234-env-parameterise-stacks.md). Moving the ECR stack deploy out of CI, and tag immutability: [#235](235-env-build-and-deploy-by-tag.md)
-- Workflows that assume these roles: [#238](238-env-ci-build-and-deploy-dev.md), [#239](239-env-ci-promote-to-prod.md). Creating prod and running the live updates: [#237](237-env-prod-stack-and-cutover.md) and the user
+- The ECR push role (OIDC subject `main` only), tag immutability and the lifecycle rule: [#235](235-env-build-and-deploy-by-tag.md). The SSM document itself: [#235](235-env-build-and-deploy-by-tag.md)
+- Workflows that assume these roles: [#238](238-env-ci-build-and-deploy-dev.md), [#239](239-env-ci-promote-to-prod.md). Creating prod and the live runbook: [#237](237-env-prod-stack-and-cutover.md) and the user
+- [#233](parked/233-ci-deploy-iam-hardening.md) (hardening the CloudFormation role) no longer applies. The orchestrator closes it
 
 ## Constraints
 
-- Change only `infra/github-oidc-stack.yaml`, that README section, and the boundary on `InstanceRole` in `infra/ec2-stack.yaml`. Start after #234 is merged, because this work uses its names and tag key and edits the same file
-- Nobody but the user writes to AWS. The engineer and QA may only run `aws cloudformation validate-template`, `aws iam simulate-custom-policy`, and `describe`/`get`/`list` calls. No new dependencies
-
-- [ ] README setup tells the user to restrict the `production` environment to deployments from `main`, and to set the repo variable `DEV_SITE_URL` ([#239](239-env-ci-promote-to-prod.md)).
+- Change only `infra/github-oidc-stack.yaml` and that README section. Nobody but the user writes to AWS: agents may run only `validate-template`, `simulate-custom-policy` and `describe`/`get`/`list`. No new dependencies
