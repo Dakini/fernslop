@@ -191,7 +191,8 @@ def test_purge_removes_rooms_deleted_over_7_days_ago_with_their_data_and_keeps_y
     second = room_purge.main([])
 
     assert (first, second) == (0, 0)
-    assert capsys.readouterr().out.splitlines() == ["Purged 1 room(s)", "Purged 0 room(s)"]
+    room_lines = [line for line in capsys.readouterr().out.splitlines() if line.endswith("room(s)")]
+    assert room_lines == ["Purged 1 room(s)", "Purged 0 room(s)"]
     assert [r.id for r in store.list_deleted_rooms()] == [young.id]
     assert store.list_room_plants(old.id, include_deleted=True) == []
     assert store.list_areas(old.id, include_deleted=True) == []

@@ -10,20 +10,22 @@ notifies the live stream: following is not room activity.
 """
 
 import logging
+import math
 import re
 import secrets
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
+from starlette.exceptions import HTTPException
 
 from app import timestamps
 from app.body import JsonBody
 from app.digest import EmailSender, confirmation_email, get_email_sender
 from app.errors import ApiError
 from app.models import RoomFollow, StoredFollow
-from app.rate_limit import FOLLOW, WRITE, rate_limited
+from app.rate_limit import FOLLOW, TOO_FAST_MESSAGE, WRITE, get_limiter, rate_limited
 from app.store import StoreProtocol, get_store
 
 logger = logging.getLogger(__name__)
@@ -31,6 +33,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Follows"])
 
 CONFIRM_WINDOW = timedelta(days=7)
+
+# Per address, across all rooms (#207): every request that passes validation counts, whatever the
+# follow's state, so the 429 reveals nothing. Attempt times live in each follow's JSON.
+ADDRESS_ATTEMPTS = 3
+ADDRESS_WINDOW = timedelta(hours=24)
 
 EMAIL_MAX_LENGTH = 254
 BAD_EMAIL_MESSAGE = "That email doesn't look right"
@@ -67,26 +74,47 @@ def follow_room(
         room = store.get_room(room_id)
         if room is None:  # deleted since the check above
             raise ApiError(404, ROOM_NOT_FOUND_MESSAGE)
+        now = timestamps.now()
+        _check_address_cap(store, email, now)
         follow = store.get_follow_by_email(room_id, email)
         if follow is None:
             follow = StoredFollow(
                 id=str(uuid.uuid4()),
                 room_id=room_id,
                 email=email,
-                created_at=timestamps.now(),
+                created_at=now,
                 unsubscribe_token=secrets.token_urlsafe(32),
             )
-            store.save_follow(follow)
         elif follow.confirmed_at is None:
             # A repeat restarts the 7 days to confirm, so the re-sent link works.
-            follow = follow.model_copy(update={"created_at": timestamps.now()})
-            store.save_follow(follow)
-        else:
+            follow = follow.model_copy(update={"created_at": now})
+        attempts = [t for t in follow.attempts if now - t < ADDRESS_WINDOW] + [now]
+        follow = follow.model_copy(update={"attempts": attempts})
+        store.save_follow(follow)
+        if follow.confirmed_at is not None:
             follow = None  # already confirmed: nothing to send
 
     if follow is not None:
         _send_confirmation(sender, follow, room.name)
     return RoomFollow(room_id=room_id, email=email)
+
+
+def _check_address_cap(store: StoreProtocol, email: str, now: datetime) -> None:
+    """429 if this address already made ``ADDRESS_ATTEMPTS`` requests in the last 24 hours.
+
+    Runs inside the follow transaction, which also records the attempt, so parallel requests
+    cannot all slip under the cap. ``FERNSLOP_RATE_LIMIT=off`` turns it off with the IP limits.
+    """
+    if not get_limiter().enabled:
+        return
+    recent = sorted(
+        t for f in store.list_follows_by_email(email) for t in f.attempts if now - t < ADDRESS_WINDOW
+    )
+    if len(recent) >= ADDRESS_ATTEMPTS:
+        retry_after = max(1, math.ceil((recent[-ADDRESS_ATTEMPTS] + ADDRESS_WINDOW - now).total_seconds()))
+        raise HTTPException(
+            429, TOO_FAST_MESSAGE.format(seconds=retry_after), headers={"Retry-After": str(retry_after)}
+        )
 
 
 def _send_confirmation(sender: EmailSender, follow: StoredFollow, room_name: str) -> None:

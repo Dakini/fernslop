@@ -747,6 +747,15 @@ paths:
 
         The response **must not** include the token. Otherwise anyone could confirm or
         unsubscribe any address they know.
+
+        Besides the per-IP limit, each address (case-insensitive) may make at most 3
+        follow requests per 24 hours across all rooms. Every request with a valid email
+        counts, whether it creates a follow, re-sends the link or sends nothing because
+        the follow is confirmed. A 4th answers `429` (same body and `Retry-After` as the
+        per-IP limit, in seconds until the oldest counted request is 24 hours old), sends
+        nothing and changes nothing; it looks the same whatever state the address is in.
+        There is no per-room cap. Follows still unconfirmed 7 days after their last
+        request are deleted by the daily purge. The mock service never caps.
       parameters:
         - $ref: "#/components/parameters/RoomId"
       requestBody:

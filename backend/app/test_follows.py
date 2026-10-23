@@ -114,6 +114,56 @@ def test_follow_with_malformed_email_returns_400_and_stores_nothing(follows_clie
     assert store.list_follows(room.id) == []
 
 
+# --- Follow: per-address cap (#207) -------------------------------------------
+
+
+@pytest.mark.parametrize("confirmed", [False, True])
+def test_fourth_follow_for_an_address_across_two_rooms_is_429_sends_nothing_and_changes_nothing(
+    follows_client, store, sender, confirmed
+):
+    room_a, room_b = store.list_rooms()[:2]
+    for room_id in (room_a.id, room_a.id, room_b.id):
+        assert follow(follows_client, room_id).status_code == 201
+    if confirmed:
+        confirm(follows_client, store.get_follow_by_email(room_a.id, "ada@example.com").unsubscribe_token)
+    before = store.list_follows_by_email("ada@example.com")
+    sent_before = len(sender.sent)
+
+    capped = follow(follows_client, room_b.id, "ADA@example.com")
+    other = follow(follows_client, room_b.id, "bob@example.com")
+
+    # The same answer whatever state the follow is in, so the cap reveals nothing.
+    assert capped.status_code == 429
+    assert capped.json()["message"].startswith("You're going a bit fast.")
+    assert 86_000 < int(capped.headers["Retry-After"]) <= 86_400
+    assert store.list_follows_by_email("ada@example.com") == before
+    assert [to for to, _, _ in sender.sent[sent_before:]] == ["bob@example.com"]
+    assert other.status_code == 201
+
+
+# --- Purge of expired unconfirmed follows (#207) ------------------------------
+
+
+def test_room_purge_deletes_only_follows_unconfirmed_after_7_days(store, capsys):
+    from app import room_purge
+    from app.test_store import make_follow
+
+    app.dependency_overrides.pop(get_store, None)  # the command uses the configured store
+    configured = get_store()
+    room = first_room(configured)
+    old = timestamps.now() - timedelta(days=7, minutes=1)
+    configured.save_follow(make_follow(id="f-expired", room_id=room.id, unsubscribe_token="t1", created_at=old))
+    configured.save_follow(
+        make_follow(id="f-confirmed", room_id=room.id, unsubscribe_token="t2", created_at=old, confirmed_at=old)
+    )
+    configured.save_follow(make_follow(id="f-young", room_id=room.id, unsubscribe_token="t3", created_at=timestamps.now()))
+
+    room_purge.main([])
+
+    assert sorted(f.id for f in configured.list_follows(room.id)) == ["f-confirmed", "f-young"]
+    assert "Purged 1 unconfirmed follow(s)" in capsys.readouterr().out
+
+
 # --- Unsubscribe --------------------------------------------------------------
 
 
