@@ -243,6 +243,26 @@ Variables (GitHub repository settings, Variables):
 
 Actions are pinned to a full commit SHA with the release tag in a comment (`aws-actions/configure-aws-credentials` is `v6.3.0`, shared with the prod workflow). Check a change to the workflow with `actionlint`, for example `uvx --with shellcheck-py --from actionlint-py actionlint`.
 
+## Promote to prod
+
+`.github/workflows/promote.yaml` deploys to prod the exact image that dev runs. It builds nothing. Start it by hand from the Actions tab ("Promote to prod", Run workflow, branch `main`) or with `gh workflow run promote.yaml --ref main`. It has no inputs and no approval step.
+
+It fails at once unless it runs from `main`, then checks out the git tag `deployed-dev` (the commit CI's `deploy-dev` last proved live on dev; the run stops with a message if the tag does not exist yet) and takes the image tag from `infra/build.sh --print-tag` on that commit. As `deploy-dev` does, it sends the SSM document to the prod instance with that tag, waits for it, and then polls `PUBLIC_URL/api/health` for about 2 minutes until it returns 200 with `status` `ok` and `version` equal to the tag. The tag and the result go to the run summary. Nothing is rolled back: a red run leaves prod as the SSM document left it.
+
+Variables of the GitHub environment `production` (Settings, Environments):
+
+| Variable | Value |
+| --- | --- |
+| `AWS_DEPLOY_ROLE_ARN` | the production deploy role of the `fernslop-github` stack ([#236](../backlog/236-env-iam-split-per-environment.md)) |
+| `INSTANCE_ID` | the prod instance (stack output `InstanceId`) |
+| `DEPLOY_DOCUMENT` | the prod stack's document, `prod-fernslop-deploy` (stack output `DeployDocumentName`) |
+| `PUBLIC_URL` | `https://<DomainName>`, no path (stack output `Url`) |
+| `AWS_REGION` | the repository's value is used unless the environment sets its own |
+
+The run stops before any AWS call if any of these five is empty.
+
+**Limit the `production` environment's deployment branches to `main`** (Settings, Environments, production, Deployment branches and tags). The prod role trusts the environment, not the branch, so without this a workflow run from another branch could use the role. The workflow's own `main` check is a second guard, not a replacement.
+
 ## GitHub Actions deploy roles (one-time setup)
 
 `github-oidc-stack.yaml` (stack `fernslop-github`) owns the account's GitHub OIDC provider (it is kept if the stack is deleted) and one deploy role per GitHub environment, so CI deploys without long-lived AWS keys:

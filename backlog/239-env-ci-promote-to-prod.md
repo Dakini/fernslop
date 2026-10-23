@@ -25,3 +25,21 @@ A workflow started by hand deploys to prod the exact image that dev runs, withou
 - Only `.github/workflows/promote.yaml` (new) and that README section; not `ci.yaml`. Starts after #229, #234, #235, #236 and #238; the first live run is after #237
 - Decided: no approval gate beyond starting the run by hand, so no required reviewers and no confirm input
 - Agents never write to AWS or start the workflow. QA checks by reading the file and running `actionlint` (brew or the `rhysd/actionlint` image, not `pyproject.toml`)
+
+
+## Engineer:
+
+Added `.github/workflows/promote.yaml` and a "Promote to prod" section in `infra/README.md`. Nothing else changed (`ci.yaml` untouched). No tests: this is config.
+
+- **Job:** `workflow_dispatch` only, no inputs. One job `promote` with `environment: production`, `id-token: write` + `contents: read`, `concurrency` group `promote-prod` (`cancel-in-progress: false`), `timeout-minutes: 45`. The five settings are job-level `env:`; the tag goes to later steps through `env:`, so no `${{ }}` appears inside a `run:`.
+- **Steps, in order:** (1) fails with one line unless `$GITHUB_REF` is `refs/heads/main`, before checkout and AWS; (2) checks that the `deployed-dev` tag exists with `gh api repos/$GITHUB_REPOSITORY/git/ref/tags/deployed-dev` (the job token, `contents: read`) and stops with a message saying CI's `deploy-dev` creates it; (3) checkout of `refs/tags/deployed-dev` (`fetch-depth: 1`, `persist-credentials: false`); (4) `infra/build.sh --print-tag`, which must match `^[0-9]{8}-[0-9]{6}-[0-9a-f]{7}$`, written to a step output; (5) the settings check (any empty of `AWS_DEPLOY_ROLE_ARN`, `AWS_REGION`, `INSTANCE_ID`, `DEPLOY_DOCUMENT`, `PUBLIC_URL` fails with one line, before AWS); (6) `configure-aws-credentials` at the #238 pin `e1253824e5c10ff9df46874f81ed3ec929e19cfd` (v6.3.0); (7) `ssm send-command` of `$DEPLOY_DOCUMENT` on `$INSTANCE_ID` with `tag=$TAG`, polled like `deploy-dev` (10 s, up to 30 min), stdout always printed, stderr and exit 1 unless `Success`; (8) the health poll, 24 x 5 s, passes only on HTTP 200 with `.status == "ok" and .version == $TAG`; on timeout it prints the expected tag and the last body and exits 1. The tag and the result go to `$GITHUB_STEP_SUMMARY` on both outcomes. No rollback.
+- **Not used:** no docker, buildx, `build.sh` build, ECR login/push, CloudFormation, S3, `deploy.sh` or `AWS-RunShellScript`. The only other action is `actions/checkout` at the existing `ci.yaml` pin.
+- **README:** how to start it (Actions tab or `gh workflow run promote.yaml --ref main`), the five `production` environment variables in a table (`AWS_REGION` falls back to the repository value, as in the dev section), and the instruction to limit the `production` environment's deployment branches to `main` because the prod role trusts the environment, not the branch.
+- **Checks:** `uvx --with shellcheck-py --from actionlint-py actionlint -verbose` (shellcheck on the `run:` blocks): 0 errors in both workflow files. Read the file against each criterion. Not run: the workflow, any AWS call or push.
+
+Notes for QA / the PM:
+
+- The criterion says "up to ~2 minutes" for the health poll and requires `status` `ok`; `deploy-dev` checks only `version`, this one checks both, as asked.
+- The tag-existence check uses `gh api` (preinstalled on the runner) rather than a `git ls-remote`, because there is no checkout yet at that point and the repository may be private.
+- `deployed-dev` is checked out by tag name at run time, so if a `main` push moves the tag between the existence check and checkout, the newer commit is promoted; that is the tag's current meaning, so I left it.
+- The README's example prod document name is `prod-fernslop-deploy`, taken from the existing naming line at the top of the README.
