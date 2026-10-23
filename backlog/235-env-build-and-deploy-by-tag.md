@@ -1,29 +1,26 @@
-# [env] Build the image once by tag, and deploy only existing tags
+# [env] Build once by tag, and deploy a tag through a stack-owned SSM document
 
 ## Goal
 
-`infra/build.sh` builds and pushes one arm64 image per commit, tagged `YYYYMMDD-HHMMSS-shortsha` (UTC), to the shared `<prefix>` ECR repo (#234). `infra/deploy.sh <env> <tag>` never builds: it runs that tag on the environment's instance and records it once healthy, so #238 and #239 can deploy and promote exact tags instead of `:latest`.
+`infra/build.sh` builds and pushes one arm64 image per commit, tagged `YYYYMMDD-HHMMSS-shortsha`. Each stack owns an SSM document that runs an existing tag, so CI (#238, #239) and the operator's `deploy.sh <env> <tag>` deploy by tag and never touch CloudFormation or `AWS-RunShellScript`.
 
 ## Acceptance criteria
 
-- [ ] `infra/build.sh` refuses a dirty working tree, builds with `--build-arg FERNSLOP_IMAGE_TAG=<tag>` (so `/api/health` reports it, [#229](229-ci-deploy-version-check.md)), pushes only `<repo>:<tag>` (no `:latest`) and prints the tag as its last stdout line. `infra/build.sh --print-tag` prints the tag it would use without building or calling AWS
-- [ ] `deploy.sh <env> <tag>` refuses a missing tag, a tag not matching the format, or a tag not in ECR (read-only `describe-images`), with a one-line message, before any change. It contains no `docker build`
-- [ ] On an existing stack, a deploy changes no CloudFormation resource (the update path keeps the previous `ImageTag` parameter, so `UserData` never changes): it writes the tag to the instance via SSM and runs `docker compose up -d`
-- [ ] After `/api/health` passes, and only then, `deploy.sh` writes the tag to the SSM parameter `/<stack name>/deployed-tag`. A new or replaced instance boots that recorded tag, else the stack's `ImageTag`; no compose file or script references `:latest`
-- [ ] `ecr-stack.yaml` sets `ImageTagMutability: IMMUTABLE`. Deploying to prod also adds a `prod-<tag>` tag to the image, and a lifecycle rule ahead of "keep the last 10" keeps the last 5 `prod-` images, so prod's tag never expires however many dev builds follow
-- [ ] `infra/README.md` has a runbook the user runs once, after #234's: execute the `<prefix>-ecr` change set, run `build.sh`, switch the live dev compose file's app image from `:latest` to the tag (by hand in an SSM session), then `deploy.sh dev <tag>` and check `/api/health` shows that tag
+- [ ] `infra/build.sh --print-tag` prints the tag without calling AWS or docker: the HEAD commit's committer time in UTC plus the 7-char sha (the same commit always gives the same tag; works on macOS and Linux). A build refuses a dirty tree, skips the push when the tag is already in ECR, builds with `--build-arg FERNSLOP_IMAGE_TAG=<tag>` ([#229](done/229-ci-deploy-version-check.md)), pushes only `<repo>:<tag>` (no `:latest`) and prints the tag as its last stdout line
+- [ ] `ec2-stack.yaml` has an `AWS::SSM::Document` `<stack name>-deploy` (`fernslop-deploy`, `prod-fernslop-deploy`) with one parameter `tag`, `allowedPattern` `^[0-9]{8}-[0-9]{6}-[0-9a-f]{7}$`. It logs in to ECR, sets `APP_TAG=<tag>` in `/opt/app/.env`, runs `docker compose up -d --pull always`, then `docker image prune -f`. A stack output gives its name
+- [ ] The compose file's app image is `<repo>:${APP_TAG}`, read from `/opt/app/.env`; no file references `:latest`. A stack takes an `ImageTag` parameter (same pattern) that a new or replaced instance boots; later deploys never change it. The document replaces only the `APP_TAG=` line, and fails with a clear message if the compose file has no `${APP_TAG}`, so an old instance never silently re-pulls `:latest`
+- [ ] `deploy.sh <env> <tag>` refuses a missing tag, a bad format or a tag not in ECR (read-only `describe-images`) with a one-line message, before any change. It has no `docker build`. It sends the stack's document, waits for it, then requires `/api/health` `version == <tag>`. It no longer deploys the ECR stack; a first creation passes `ImageTag=<tag>`, an update keeps the previous one
+- [ ] `ecr-stack.yaml` sets `ImageTagMutability: IMMUTABLE`, expires untagged images after 1 day and keeps the last 50 tagged ones. It adds a push role: OIDC subject `repo:<owner/repo>:ref:refs/heads/main` only, ECR push and `DescribeImages` on this repository only, no deploy rights. It never creates the OIDC provider (`fernslop-github` owns it, #236); a required `ExistingOidcProviderArn` parameter names it. Stack outputs `EcrPushRoleArn` and `RepositoryUri` become the repo variables `ECR_PUSH_ROLE_ARN` and `ECR_REPOSITORY_URI`
+- [ ] `infra/README.md` has a runbook the user runs once, after #234's: apply the `<prefix>-ecr` change set (`ExistingOidcProviderArn` from `aws iam list-open-id-connect-providers`), run `build.sh`, create (not execute) the `fernslop` change set (new document, no `Replacement`), execute it, edit the live dev compose app image from `:latest` to `:${APP_TAG}` in an SSM session, then `deploy.sh dev <tag>`; each step says how to check it, and tolerates the older instance files ([#234](done/234-env-parameterise-stacks.md) comment)
 - [ ] `deploy.sh` and `build.sh` pass `bash -n` and `shellcheck`; both templates pass `uvx cfn-lint`
 
 ## Out of scope
 
-- The tag in `/api/health`: [#229](229-ci-deploy-version-check.md); comparing it after deploy: [#238](238-env-ci-build-and-deploy-dev.md), [#239](239-env-ci-promote-to-prod.md)
-- Deploy-role permissions for the SSM parameter and for adding `prod-` tags (`ecr:PutImage`): [#236](236-env-iam-split-per-environment.md)
-- Pushing file changes to the running instance automatically: [#208](parked/208-audit-apply-to-running-instance.md) (parked); rollback: [#230](parked/230-ci-deploy-rollback.md)
+- Deploy roles (only `ssm:SendCommand` on that document and that instance), GitHub environments and variables: [#236](236-env-iam-split-per-environment.md)
+- Workflows, the `deployed-dev` tag and the health comparison in CI: [#238](238-env-ci-build-and-deploy-dev.md), [#239](239-env-ci-promote-to-prod.md); creating prod: [#237](237-env-prod-stack-and-cutover.md)
+- Backups and other files the live dev instance lacks: not part of this switch; rollback: [#230](parked/230-ci-deploy-rollback.md)
 
 ## Constraints
 
-- After #234 (its names, `deploy.sh <env>` and `DOMAIN=`). Only `infra/build.sh` (new), `deploy.sh`, `ec2-stack.yaml`, `ecr-stack.yaml`, `README.md`
-- The instance role may read only its own `deployed-tag` parameter; keep dev's physical names unchanged
-- Agents run only read-only AWS commands; the user runs builds, deploys and change sets. `shellcheck`/`cfn-lint` via `uvx` or brew, not `pyproject.toml`
-
-**Orchestrator decision:** `deploy.sh` and CI stop deploying the `fernslop-ecr` stack, which becomes a manual step in the README ([#236](236-env-iam-split-per-environment.md)). The SSM parameter for the recorded tag and keeping 5 `prod-` images are both confirmed.
+- Only `infra/build.sh` (new), `deploy.sh`, `ec2-stack.yaml`, `ecr-stack.yaml`, `README.md`; keep dev's physical names and the instance `Name` tag (`fernslop`, `prod-fernslop`) exactly as #234 set it: IAM scopes instances by it. Do not set `FERNSLOP_IMAGE_TAG` at run time
+- Agents run only read-only AWS commands; the user runs builds, deploys and change sets. `shellcheck` and `cfn-lint` via `uvx` or brew, not `pyproject.toml`. Tags older than the last 50 builds expire, so a long-lagging prod loses its image on the next pull
