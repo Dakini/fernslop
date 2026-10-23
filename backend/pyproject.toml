@@ -21,3 +21,8 @@ dev = [
 testpaths = ["app"]
 python_files = ["tests.py", "test_*.py", "*_tests.py"]
 pythonpath = ["."]
+
+[tool.ruff]
+# Resolve first-party imports (app, conftest) from backend/, so ruff sorts
+# imports the same way whether it runs from the repo root or from backend/.
+src = ["."]
