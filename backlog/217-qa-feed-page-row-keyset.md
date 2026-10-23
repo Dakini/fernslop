@@ -53,3 +53,18 @@ Limit  (cost=0.41..10.49 rows=50 width=40) (actual rows=50 loops=1)
         Rows Removed by Filter: 10000
 Execution Time: 2.377 ms
 ```
+
+## QA: PASS
+
+- [x] On Postgres 17, `EXPLAIN ANALYZE` of a page at depth 10 000 of 20 000 shows the keyset as an `Index Cond` on `ix_feed_events_room_created_seq`, with no `Rows Removed by Filter` for it - PASS
+      Throwaway `postgres:17` (17.11) container `fernslop-pg217-qa` on :55517, removed afterwards. Ran the engineer's script (it only uses the URL it is given): 20 000 events in `big` (pairs share a timestamp) plus 20 000 in `other`, `ANALYZE`d, cursor at depth 10 000, `limit=50`, SQL captured from `list_feed_page` itself:
+      `Index Scan Backward using ix_feed_events_room_created_seq` with
+      `Index Cond: (((room_id)::text = 'big'::text) AND (ROW((created_at)::text, seq) < ROW('2026-01-01T01:23:20.000000+00:00'::text, 10022)))`,
+      actual rows=50, no `Filter` line and no `Rows Removed by Filter`, execution 0.031 ms. Cross-check in psql: the 50 keyset rows equal `OFFSET 10000 LIMIT 50` under the same ordering, across the shared-timestamp boundary.
+- [x] Paging results are unchanged: the `test_rooms.py` paging tests pass on SQLite and on Postgres - PASS
+      `test_feed_pages_cover_equal_timestamps_without_gaps_or_repeats_while_events_arrive` and `test_feed_page_with_a_cursor_from_another_room_or_a_bad_limit_gives_400` both pass on SQLite and with `FERNSLOP_TEST_DATABASE_URL` pointing at the container (`conftest.py` switches the fixtures' store to it).
+- [x] `uvx ruff check .` is clean - PASS ("All checks passed!" from `backend/`)
+
+Tests: `uv sync && uv run pytest` (SQLite): 179 passed, 2 skipped (Postgres-only). `FERNSLOP_TEST_DATABASE_URL=postgresql+psycopg://…:55517/fernslop uv run pytest`: 181 passed, 0 failed.
+
+The diff touches only `list_feed_page` in `backend/app/sql_store.py` (and the imports). No code was changed by QA.
