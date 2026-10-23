@@ -25,3 +25,17 @@ An image built with a tag (format `YYYYMMDD-HHMMSS-shortsha`, from #235) reports
 - The runtime stage turns the build arg into the env var `FERNSLOP_IMAGE_TAG`; the route reads it per request and omits `version` when it is unset or blank. Deploy files must not set it at run time
 - The route stays out of `openapi.yaml` (`include_in_schema=False`); document the field in the route's docstring
 - No new dependencies; follow `_docs/testing-guidelines.md`
+
+## Comments
+
+**Engineer:** Changed only `Dockerfile`, `backend/app/routers/health.py` and `backend/app/test_main.py`.
+
+- Criterion 1: pass. `ARG FERNSLOP_IMAGE_TAG=""` plus `ENV FERNSLOP_IMAGE_TAG=$FERNSLOP_IMAGE_TAG` in the runtime stage; the route reads the env var per request. Built with `--build-arg FERNSLOP_IMAGE_TAG=20261023-120000-abc1234`, run with SQLite: `curl /api/health` gave `200 {"status":"ok","version":"20261023-120000-abc1234"}`.
+- Criterion 2: pass. Built with no arg and with `--build-arg FERNSLOP_IMAGE_TAG=`: both gave `200 {"status":"ok"}`. The route strips the value and leaves `version` out when it is blank.
+- Criterion 3: pass. `version` is the env var's value only, nothing else is added.
+- Criterion 4: pass. The 503 branch is untouched; `test_health_returns_503_when_the_database_is_unreachable` still passes.
+- Criterion 5: pass. The `ARG` sits after every `RUN` and `COPY` (just before `CMD`, after `EXPOSE`), so it is later than the issue asked: with `--progress=plain`, a build that changed only the tag showed every step `CACHED`, `useradd` included.
+- Criterion 6: pass. Two tests in `backend/app/test_main.py`: `test_health_returns_ok` now unsets the env var and still expects exactly `{"status": "ok"}` (name kept because `_docs/testing-guidelines.md` cites it), and `test_health_with_an_image_tag_returns_it_as_version` is new.
+- The route keeps `include_in_schema=False`; the field is documented in its docstring. No deploy file sets the variable (infra/ not touched).
+
+Tests: `cd backend && uv run pytest` 184 passed, 2 skipped; `uvx ruff check .` clean.

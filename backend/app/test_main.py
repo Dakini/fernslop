@@ -2,6 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
+from app.routers.health import IMAGE_TAG_ENV
 from app.store import DATABASE_URL_ENV
 
 HEALTH = "/api/health"
@@ -17,11 +18,23 @@ LOCAL_ORIGINS = [
 # --- Health ------------------------------------------------------------------
 
 
-def test_health_returns_ok(client):
+def test_health_returns_ok(client, monkeypatch):
+    monkeypatch.delenv(IMAGE_TAG_ENV, raising=False)
+
     response = client.get(HEALTH)
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_health_with_an_image_tag_returns_it_as_version(client, monkeypatch):
+    # The Dockerfile turns the FERNSLOP_IMAGE_TAG build arg into this env var (#229).
+    monkeypatch.setenv(IMAGE_TAG_ENV, "20261023-120000-abc1234")
+
+    response = client.get(HEALTH)
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "version": "20261023-120000-abc1234"}
 
 
 def test_health_returns_503_when_the_database_is_unreachable(client, monkeypatch):
