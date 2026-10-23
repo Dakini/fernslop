@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { getServices, type IdentifyCandidate, type Plant } from "@/services";
 import { RateLimitError } from "@/services/http/httpService";
+import { prepareImage } from "@/lib/image";
 import { PlantAvatar } from "./PlantAvatar";
 
 const LOW_CONFIDENCE = 0.3;
@@ -33,7 +34,7 @@ export function AddPlantDialog({ open, onOpenChange, onPick }: { open: boolean; 
     setCandidates(null);
     setNotice(null);
     try {
-      const c = await getServices().identifyPlant(file);
+      const c = await getServices().identifyPlant(await prepareImage(file));
       if (!c.length || c[0]!.confidence < LOW_CONFIDENCE) {
         setNotice("We couldn't be sure — try searching instead");
         setTab("search");

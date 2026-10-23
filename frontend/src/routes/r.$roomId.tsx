@@ -22,6 +22,7 @@ import { allCareStatuses, CARE_LABELS, type CareStatus } from "@/services/care";
 import { getServices, CARE_TYPES, type CareType, type Photo, type Plant, type PlantCategory, type RoomPlant } from "@/services";
 import { RateLimitError } from "@/services/http/httpService";
 import { cn } from "@/lib/utils";
+import { prepareImage } from "@/lib/image";
 
 export const Route = createFileRoute("/r/$roomId")({
   ssr: false,
@@ -329,7 +330,7 @@ function PostBox({ onPost }: { onPost: (text: string, photoId: string | null) =>
     if (!f) return;
     setUploading(true);
     try {
-      setPhoto(await getServices().uploadPhoto(f));
+      setPhoto(await getServices().uploadPhoto(await prepareImage(f)));
     } catch (e) {
       if (!(e instanceof RateLimitError)) toast.error((e as Error).message);
     } finally {
