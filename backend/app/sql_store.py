@@ -114,6 +114,7 @@ _DATA_TABLES = (_plants, _rooms, _room_plants, _areas, _feed_events, _follows, _
 # --- Connection setup -----------------------------------------------------------
 
 _POSTGRES_LOCK_KEY = 7_130_001  # arbitrary; the advisory lock key every Fernslop transaction takes
+PING_TIMEOUT_SECONDS = 3  # connecting to PostgreSQL, and the health check's SELECT 1
 
 
 def _make_engine(url: str) -> Engine:
@@ -127,8 +128,11 @@ def _make_engine(url: str) -> Engine:
 
     options: dict = {"connect_args": {"check_same_thread": False, "timeout": 30}}
     if parsed.database in (None, "", ":memory:"):
-        # One shared connection, so every method sees the same in-memory database.
+        # One shared connection, so every method sees the same in-memory database. No rollback when it goes
+        # back to the pool: ping() returns it while another thread may be inside a transaction on it, and
+        # every transaction() ends with its own commit or rollback anyway.
         options["poolclass"] = StaticPool
+        options["pool_reset_on_return"] = None
     engine = create_engine(url, **options)
 
     @event.listens_for(engine, "connect")
@@ -150,7 +154,7 @@ def _make_engine(url: str) -> Engine:
 
 def _make_postgres_engine(url: str) -> Engine:
     # pre-ping replaces connections the server or a proxy has closed while idle in the pool.
-    engine = create_engine(url, pool_pre_ping=True)
+    engine = create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": PING_TIMEOUT_SECONDS})
 
     @event.listens_for(engine, "begin")
     def _on_begin(connection):
@@ -187,6 +191,23 @@ class SqlStore:
         self._engine.dispose()
 
     # --- Housekeeping -----------------------------------------------------------
+
+    def ping(self) -> None:
+        """Run ``SELECT 1``; raises when the database does not answer within a few seconds.
+
+        Takes neither the store lock nor PostgreSQL's advisory lock: it runs on a raw driver connection from
+        the pool, which fires no SQLAlchemy ``begin`` event, so a long transaction cannot stall it.
+        """
+        conn = self._engine.raw_connection()
+        try:
+            cursor = conn.cursor()
+            if self._engine.dialect.name == "postgresql":
+                cursor.execute(f"SET LOCAL statement_timeout = {PING_TIMEOUT_SECONDS * 1000}")
+            cursor.execute("SELECT 1")
+            cursor.fetchone()
+            cursor.close()
+        finally:
+            conn.close()  # back to the pool, which rolls back the driver's implicit transaction (PostgreSQL)
 
     def transaction(self) -> AbstractContextManager[None]:
         """Exclusive and atomic: an exception rolls back every write in the block. Re-entrant.

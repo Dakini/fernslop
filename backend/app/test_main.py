@@ -2,6 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
+from app.store import DATABASE_URL_ENV
 
 HEALTH = "/api/health"
 LOCAL_ORIGINS = [
@@ -21,6 +22,16 @@ def test_health_returns_ok(client):
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+
+
+def test_health_returns_503_when_the_database_is_unreachable(client, monkeypatch):
+    # Nothing listens on port 1, so the connection is refused at once.
+    monkeypatch.setenv(DATABASE_URL_ENV, "postgresql+psycopg://fernslop:pw@127.0.0.1:1/fernslop")
+
+    response = client.get(HEALTH)
+
+    assert response.status_code == 503
+    assert response.json()["message"]
 
 
 @pytest.mark.parametrize("path", ["/", "/health", "/rooms"])
