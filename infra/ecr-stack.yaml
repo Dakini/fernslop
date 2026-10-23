@@ -1,16 +1,28 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Fernslop - ECR repository for the app image.
+Description: Fernslop - ECR repository for the app image, shared by the dev and prod stacks (stack <AppPrefix>-ecr).
+
+Parameters:
+  AppPrefix:
+    Type: String
+    Default: fernslop
+    AllowedPattern: "^[a-z0-9-]+$"
+    ConstraintDescription: lowercase letters, digits and hyphens only
+    Description: Names the repository; infra/deploy.sh passes APP_PREFIX.
 
 Resources:
   Repository:
     Type: AWS::ECR::Repository
     Properties:
-      RepositoryName: fernslop
+      RepositoryName: !Ref AppPrefix
       EmptyOnDelete: true
       ImageScanningConfiguration: { ScanOnPush: true }
       LifecyclePolicy:
         LifecyclePolicyText: |
           {"rules":[{"rulePriority":1,"description":"keep the last 10 images","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":10},"action":{"type":"expire"}}]}
+      # One repository serves both environments, so it belongs to neither
+      Tags:
+        - { Key: App, Value: !Ref AppPrefix }
+        - { Key: Environment, Value: shared }
 
 Outputs:
   RepositoryUri:

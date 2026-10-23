@@ -7,6 +7,20 @@ Description: >
   nightly to the BackupBucket; replacing the instance loses changes since the last dump (infra/README.md).
 
 Parameters:
+  AppPrefix:
+    Type: String
+    Default: fernslop
+    AllowedPattern: "^[a-z0-9-]+$"
+    ConstraintDescription: lowercase letters, digits and hyphens only
+    Description: >
+      The ECR repository (shared by both environments) and the App tag. infra/deploy.sh passes APP_PREFIX.
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+    Description: >
+      dev names everything <AppPrefix> (the stack, log group /<AppPrefix>/app, dashboard, instance Name tag);
+      prod names them prod-<AppPrefix>. Also the Environment tag and the BackupSucceeded dimension.
   VpcId:
     Type: AWS::EC2::VPC::Id
     Default: vpc-0123456789abcdef0
@@ -22,6 +36,13 @@ Parameters:
   LatestAmiId:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+    Description: Used only when AmiId is empty, i.e. when the stack is first created.
+  AmiId:
+    Type: String
+    Default: ""
+    Description: >
+      The instance's AMI. Empty uses LatestAmiId; infra/deploy.sh passes the running instance's AMI on every
+      update, because LatestAmiId re-resolves and a newer image would replace the instance.
   DomainName:
     Type: String
     Default: ""
@@ -45,13 +66,24 @@ Rules:
 
 Conditions:
   HasDomain: !Not [!Equals [!Ref DomainName, ""]]
+  IsProd: !Equals [!Ref Environment, prod]
+  HasAmiId: !Not [!Equals [!Ref AmiId, ""]]
 
+# Physical names: dev keeps exactly the names it had before environments existed (renaming the log group or
+# dashboard, or changing the security group description, replaces the resource); prod is prefixed prod-, so
+# neither it nor what CloudFormation generates from its stack name matches dev's <AppPrefix>-* patterns.
+# Every resource that takes tags carries App=<AppPrefix> and Environment=<Environment>.
 Resources:
   LogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: /fernslop/app
+      LogGroupName: !Sub
+        - "/${Name}/app"
+        - Name: !If [IsProd, !Sub "prod-${AppPrefix}", !Ref AppPrefix]
       RetentionInDays: 14
+      Tags:
+        - { Key: App, Value: !Ref AppPrefix }
+        - { Key: Environment, Value: !Ref Environment }
 
   SecurityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -61,6 +93,9 @@ Resources:
       SecurityGroupIngress:
         - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0 }
         - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0 }
+      Tags:
+        - { Key: App, Value: !Ref AppPrefix }
+        - { Key: Environment, Value: !Ref Environment }
 
   InstanceRole:
     Type: AWS::IAM::Role
@@ -71,6 +106,9 @@ Resources:
           - { Effect: Allow, Principal: { Service: ec2.amazonaws.com }, Action: "sts:AssumeRole" }
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Tags:
+        - { Key: App, Value: !Ref AppPrefix }
+        - { Key: Environment, Value: !Ref Environment }
       Policies:
         - PolicyName: pull-image-and-write-logs
           PolicyDocument:
@@ -79,7 +117,7 @@ Resources:
               - { Effect: Allow, Action: "ecr:GetAuthorizationToken", Resource: "*" }
               - Effect: Allow
                 Action: [ecr:BatchCheckLayerAvailability, ecr:GetDownloadUrlForLayer, ecr:BatchGetImage]
-                Resource: !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/fernslop"
+                Resource: !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${AppPrefix}"
               - Effect: Allow
                 Action: [logs:CreateLogStream, logs:PutLogEvents]
                 Resource: !GetAtt LogGroup.Arn
@@ -121,6 +159,9 @@ Resources:
             ExpirationInDays: 30
             # A streamed upload that dies half way leaves parts the instance may not abort itself
             AbortIncompleteMultipartUpload: { DaysAfterInitiation: 1 }
+      Tags:
+        - { Key: App, Value: !Ref AppPrefix }
+        - { Key: Environment, Value: !Ref Environment }
 
   BackupBucketPolicy:
     Type: AWS::S3::BucketPolicy
@@ -145,7 +186,7 @@ Resources:
     Type: AWS::EC2::Instance
     Properties:
       InstanceType: !Ref InstanceType
-      ImageId: !Ref LatestAmiId
+      ImageId: !If [HasAmiId, !Ref AmiId, !Ref LatestAmiId]
       SubnetId: !Ref SubnetId
       SecurityGroupIds: [!Ref SecurityGroup]
       IamInstanceProfile: !Ref InstanceProfile
@@ -157,7 +198,9 @@ Resources:
         - DeviceName: /dev/xvda
           Ebs: { VolumeSize: 20, VolumeType: gp3, Encrypted: true }
       Tags:
-        - { Key: Name, Value: fernslop }
+        - { Key: Name, Value: !If [IsProd, !Sub "prod-${AppPrefix}", !Ref AppPrefix] }
+        - { Key: App, Value: !Ref AppPrefix }
+        - { Key: Environment, Value: !Ref Environment }
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
@@ -226,7 +269,7 @@ Resources:
               restart: unless-stopped
 
             app:
-              image: ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/fernslop:latest
+              image: ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${AppPrefix}:latest
               env_file: app.env
               environment:
                 # Only Caddy (its fixed address below) may set the client IP with X-Forwarded-For;
@@ -338,7 +381,8 @@ Resources:
           docker compose exec -T db pg_dump -U fernslop -d fernslop -Fc \
             | aws s3 cp - "s3://${BackupBucket}/$key" --region ${AWS::Region} --only-show-errors
           aws cloudwatch put-metric-data --region ${AWS::Region} \
-            --namespace Fernslop --metric-name BackupSucceeded --value 1 --unit Count
+            --namespace Fernslop --metric-name BackupSucceeded --value 1 --unit Count \
+            --dimensions Environment=${Environment}
           echo "backup uploaded: s3://${BackupBucket}/$key"
           BACKUP
           chmod 700 /usr/local/bin/fernslop-backup
@@ -421,6 +465,9 @@ Resources:
     Type: AWS::EC2::EIP
     Properties:
       Domain: vpc
+      Tags:
+        - { Key: App, Value: !Ref AppPrefix }
+        - { Key: Environment, Value: !Ref Environment }
 
   ElasticIpAssociation:
     Type: AWS::EC2::EIPAssociation
@@ -442,15 +489,19 @@ Resources:
       Threshold: 0
       ComparisonOperator: GreaterThanThreshold
       AlarmActions: [!Sub "arn:aws:automate:${AWS::Region}:ec2:recover"]
+      Tags:
+        - { Key: App, Value: !Ref AppPrefix }
+        - { Key: Environment, Value: !Ref Environment }
 
   # ALARM when no nightly backup has succeeded for 26 hours: 26 hourly periods, each with no
-  # BackupSucceeded data point (missing data counts as breaching)
+  # BackupSucceeded data point (missing data counts as breaching). Only this environment's backups count.
   BackupMissingAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmDescription: No Fernslop database backup reached S3 in the last 26 hours (see infra/README.md)
+      AlarmDescription: !Sub "No Fernslop ${Environment} database backup reached S3 in the last 26 hours (see infra/README.md)"
       Namespace: Fernslop
       MetricName: BackupSucceeded
+      Dimensions: [{ Name: Environment, Value: !Ref Environment }]
       Statistic: Sum
       Period: 3600
       EvaluationPeriods: 26
@@ -458,11 +509,15 @@ Resources:
       Threshold: 1
       ComparisonOperator: LessThanThreshold
       TreatMissingData: breaching
+      Tags:
+        - { Key: App, Value: !Ref AppPrefix }
+        - { Key: Environment, Value: !Ref Environment }
 
+  # Takes no tags
   Dashboard:
     Type: AWS::CloudWatch::Dashboard
     Properties:
-      DashboardName: fernslop
+      DashboardName: !If [IsProd, !Sub "prod-${AppPrefix}", !Ref AppPrefix]
       DashboardBody: !Sub |
         {"widgets": [
           {"type": "metric", "x": 0, "y": 0, "width": 12, "height": 6, "properties": {
@@ -484,7 +539,7 @@ Resources:
             "title": "Nightly database backup", "alarms": ["${BackupMissingAlarm.Arn}"]}},
           {"type": "metric", "x": 18, "y": 6, "width": 6, "height": 6, "properties": {
             "title": "Backups uploaded (per day)", "region": "${AWS::Region}", "stat": "Sum", "period": 86400,
-            "metrics": [["Fernslop", "BackupSucceeded"]]}},
+            "metrics": [["Fernslop", "BackupSucceeded", "Environment", "${Environment}"]]}},
           {"type": "log", "x": 0, "y": 12, "width": 24, "height": 8, "properties": {
             "title": "Logs (app, db, caddy)", "region": "${AWS::Region}", "view": "table",
             "query": "SOURCE '${LogGroup}' | fields @timestamp, @logStream, @message | sort @timestamp desc | limit 100"}}
