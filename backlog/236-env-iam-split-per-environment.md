@@ -25,9 +25,3 @@
 
 - Change only `infra/github-oidc-stack.yaml`, that README section, and the boundary on `InstanceRole` in `infra/ec2-stack.yaml`. Start after #234 is merged, because this work uses its names and tag key and edits the same file
 - Nobody but the user writes to AWS. The engineer and QA may only run `aws cloudformation validate-template`, `aws iam simulate-custom-policy`, and `describe`/`get`/`list` calls. No new dependencies
-
-**Orchestrator decisions:**
-- Each deploy role may `ssm:GetParameter`/`PutParameter` only its own `/<stack name>/deployed-tag`. The prod role may also read dev's tag. Instance roles read their own tag at boot ([#235](235-env-build-and-deploy-by-tag.md)).
-- The prod deploy role may also `ecr:BatchGetImage`/`ecr:PutImage`, but only to add `prod-<tag>` tags (#235).
-- The `fernslop-ecr` stack is deployed by hand. Neither CI role may change it.
-- Prod role ARNs go in the GitHub `production` environment, and dev's go in repo variables of the same name.
