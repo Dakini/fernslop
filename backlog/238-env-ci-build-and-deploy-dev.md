@@ -25,3 +25,23 @@ Every push to `main` that passes the tests is built once by `infra/build.sh` and
 - Starts after #229, #234, #235 and #236 are merged. Only `.github/workflows/ci.yaml` and `infra/README.md`. The workflow never creates a stack, so a first deploy stays manual
 - Nobody but the user writes to AWS: check by reading the workflow and running `actionlint` (brew or a container, not `pyproject.toml`). No tests
 - A newer push may replace a queued (not running) `main` run, so not every commit reaches dev; that is fine
+
+## Engineer:
+
+Changed only `.github/workflows/ci.yaml` and `infra/README.md` (new section "CI: build and deploy to dev"). No tests: this is config.
+
+- **`build-and-push`:** `needs: [backend, frontend, stack]`, `if` push on `main`, `id-token: write` + `contents: read`, no `environment:`. Steps: checkout (`persist-credentials: false`), `configure-aws-credentials` with `vars.ECR_PUSH_ROLE_ARN` / `vars.AWS_REGION`, QEMU (arm64), buildx, then `infra/build.sh`. It takes the last stdout line as `tag`, checks it against the tag pattern and exposes it as the job output. `ECR_REPOSITORY_URI` is passed from the optional repo variable (build.sh falls back to the account lookup if it is empty).
+- **`deploy-dev`:** `needs: [build-and-push]`, same `if`, `environment: development`, `id-token: write` + `contents: write`. The tag and the five settings are job-level `env:`, so no `${{ }}` appears inside a `run:`. Step 1 fails with one line listing any empty one of `AWS_DEPLOY_ROLE_ARN`, `AWS_REGION`, `INSTANCE_ID`, `DEPLOY_DOCUMENT`, `PUBLIC_URL` (and a bad tag), before checkout and AWS. Then: `ssm send-command` of `DEPLOY_DOCUMENT` with `tag=$TAG`, polled with `get-command-invocation` every 10 s for up to 30 min (`aws ssm wait` stops at 100 s), stdout always printed, stderr and exit 1 unless `Success`. Then the health poll (24 x 5 s, 200 and `.version == $TAG`; on timeout it prints the expected tag and the last body). Then the read-only smoke test (`GET /` 200 with a `text/html` content type; `GET /api/plants` 200 and a non-empty array). Only then `git tag -f deployed-dev` and a forced push over HTTPS with the job token in `GITHUB_TOKEN` (checkout stores no credentials). A failure in any earlier step skips the tag. No rollback.
+- **Pins** (resolved with `gh api repos/<owner>/<repo>/commits/<tag> --jq .sha`; the tags are lightweight, so these are commit SHAs):
+  - `aws-actions/configure-aws-credentials` `e1253824e5c10ff9df46874f81ed3ec929e19cfd` = `v6.3.0` (latest release). **This is the shared pin; #239's `promote.yaml` must use the same one.**
+  - `docker/setup-qemu-action` `99012661954931238ded8c8b007157a8430204e1` = `v4.4.0`
+  - `docker/setup-buildx-action` `f87e5991a6d7451dcb8d9637bfbc97413f497069` = `v4.4.1`
+  - `actions/checkout` is unchanged (`3d3c42e5...` = `v7.0.1`).
+- **README:** the flow, the variable table (repo: `ECR_PUSH_ROLE_ARN`, `AWS_REGION`, optional `ECR_REPOSITORY_URI`; `development` environment: `AWS_DEPLOY_ROLE_ARN`, `INSTANCE_ID`, `DEPLOY_DOCUMENT`, `PUBLIC_URL`), and that rerunning only a failed `deploy-dev` reuses `build-and-push`'s tag (it deploys that run's commit, not the new tip of `main`).
+- **Checks:** `uvx --with shellcheck-py --from actionlint-py actionlint -verbose` (actionlint 1.7.12 with shellcheck on the `run:` blocks) reports 0 errors. Read through the file for the criteria above. Not run: the workflow itself, any AWS call or any push (user only).
+
+Notes for QA / the PM:
+
+- #236 is not merged into this branch's base (`github-oidc-stack.yaml` and its README section still describe the old roles), so the README table names the development deploy role without an output name. The old section about `AWS-RunShellScript` is #236's to rewrite and I left it.
+- `ECR_REPOSITORY_URI` as a repo variable is an addition the criteria do not list; it is optional and only saves `build.sh` an `sts get-caller-identity` call. Remove it if the PM wants exactly the listed variables.
+- The `deploy-dev` job checks out the commit only to create the `deployed-dev` tag; the deploy itself uses nothing from the checkout.
