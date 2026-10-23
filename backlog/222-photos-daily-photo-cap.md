@@ -2,7 +2,7 @@
 
 ## Goal
 
-One garden can't fill the 4 GiB photo store (#198) by posting photos. It takes at most `FERNSLOP_PHOTO_POSTS_PER_DAY` (default 30, about 54 MB at #209 sizes) photo posts in any 24 hours. This works like #210's post cap and sits under it. Size: medium, single issue. The engineer implements it and QA spot-checks.
+One garden can't fill the 4 GiB photo store (#198) by posting photos. It takes at most `FERNSLOP_PHOTO_POSTS_PER_DAY` (default 15, about 27 MB at #209 sizes) photo posts in any 24 hours. This works like #210's post cap and sits under it. Size: medium, single issue. The engineer implements it and QA spot-checks.
 
 ## Acceptance criteria
 
@@ -24,5 +24,5 @@ One garden can't fill the 4 GiB photo store (#198) by posting photos. It takes a
 
 ## Open questions (recommended default in bold)
 
-1. Default cap: **30 photo posts per garden per day**. This is generous for a real garden and holds one garden to about 1.6 GB a month.
-2. Add a daily per-IP `upload_photo` limit as well, e.g. `30/hour` plus `100/day`? **Not in this issue. File a follow-up if wanted.**
+1. Default cap: **15 photo posts per garden per day** (user decision, 2026-10-23).
+2. Daily per-IP upload limit: the user wants it, filed as a separate follow-up issue.
