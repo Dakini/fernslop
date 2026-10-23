@@ -23,3 +23,16 @@
 ## Constraints
 
 - Change only `infra/github-oidc-stack.yaml` and that README section. Nobody but the user writes to AWS: agents may run only `validate-template`, `simulate-custom-policy` and `describe`/`get`/`list`. No new dependencies
+
+
+## Engineer:
+
+Changed only `infra/github-oidc-stack.yaml` and the "GitHub Actions deploy roles" section of `infra/README.md`. No tests: this is config.
+
+- **Template:** `CloudFormationRole`, `DeployRole`, `TrustSubject` and the `TrustMain` condition are gone. New `DevelopmentDeployRole` and `ProductionDeployRole`, parameter `AppPrefix` (same pattern as #234), outputs `DevelopmentDeployRoleArn` and `ProductionDeployRoleArn`. `GitHubOidcProvider` keeps its logical ID and gains `DeletionPolicy: Retain` and `UpdateReplacePolicy: Retain`.
+- **Trust:** `aud` = `sts.amazonaws.com`, `sub` exactly `repo:<GitHubRepo>:environment:development` / `...:environment:production`. No wildcard, no `ref:` subject.
+- **Rights:** `ssm:SendCommand` on `document/<prefix>-deploy` (`prod-<prefix>-deploy`), `ssm:SendCommand` on `instance/*` with `ssm:resourceTag/Name` = `<prefix>` (`prod-<prefix>`), and `ssm:GetCommandInvocation`/`ssm:ListCommandInvocations` on `*` (they take no resource). No other action.
+- **Kept `CreateOidcProvider` and `ExistingOidcProviderArn`:** the issue does not name them, and the live stack has `CreateOidcProvider=true` (read with `describe-stacks`), so the provider stays a conditional resource and the change set leaves it alone.
+- **README:** the section is rewritten in the order the issue asks (change set and check, execute, create environments, restrict `production` to `main`, set the five variables), and says the ECR push role lives in `ecr-stack.yaml`, its two outputs become `ECR_PUSH_ROLE_ARN` and `ECR_REPOSITORY_URI` beside repo-level `AWS_REGION`, what a deploy role can do, and that CloudFormation stays manual. The change-set command omits the removed `TrustSubject` and uses `UsePreviousValue` for the rest.
+- **Checks:** `uvx cfn-lint` clean; `aws cloudformation validate-template` passes. `aws iam simulate-custom-policy` on each role's policy (resolved from the template, placeholder account and region): the dev role allows `SendCommand` on `fernslop-deploy` and on an instance tagged `Name=fernslop`, plus the two read actions; it denies (implicit) `prod-fernslop-deploy`, `AWS-RunShellScript`, an instance tagged `Name=prod-fernslop`, an untagged instance, `ecr:PutImage`, `cloudformation:ExecuteChangeSet`, `iam:PassRole` and `s3:GetObject`. The prod role mirrors this (allows `prod-fernslop-deploy` and `prod-fernslop`, denies dev's). Not run: the live change set, which only the user can create. The provider row cannot be seen until then; the template-level reason it stays untouched is that its logical ID, condition, properties and parameters are unchanged.
+- **For #238:** `deploy.sh` still reads `CFN_ROLE_ARN` (not a file this issue names); with the CloudFormation role gone nothing sets it. #233 (parked) no longer applies; the orchestrator closes it.

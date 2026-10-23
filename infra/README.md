@@ -216,47 +216,71 @@ Do this once, after the section above, with operator credentials, from the repo 
 
    Later deploys are `TAG=$(infra/build.sh)` and `infra/deploy.sh dev "$TAG"`; CI does the same through the document ([#238](../backlog/238-env-ci-build-and-deploy-dev.md)).
 
-## GitHub Actions deploy role (one-time setup)
+## GitHub Actions deploy roles (one-time setup)
 
-`github-oidc-stack.yaml` (stack `fernslop-github`) lets GitHub Actions run `deploy.sh` without long-lived AWS keys. It creates two roles:
+`github-oidc-stack.yaml` (stack `fernslop-github`) owns the account's GitHub OIDC provider (it is kept if the stack is deleted) and one deploy role per GitHub environment, so CI deploys without long-lived AWS keys:
 
-- **Deploy role:** assumed through GitHub OIDC. Only `Dakini/fernslop` can assume it, and only from `main` or from the `production` environment, depending on the setting below. It can run change sets on `fernslop` and `fernslop-ecr`, push to the `fernslop` ECR repository and run `AWS-RunShellScript` on the instance tagged `Name=fernslop`. It has no IAM write and no S3 access, so it cannot read the backups.
-- **CloudFormation role:** the role that stack updates run as.
+| Role (stack output) | Trusts only | May send the document | To instances tagged `Name` |
+| --- | --- | --- | --- |
+| `DevelopmentDeployRole` (`DevelopmentDeployRoleArn`) | `Dakini/fernslop`, environment `development` | `<prefix>-deploy` (`fernslop-deploy`) | `<prefix>` (`fernslop`) |
+| `ProductionDeployRole` (`ProductionDeployRoleArn`) | `Dakini/fernslop`, environment `production` | `prod-<prefix>-deploy` | `prod-<prefix>` |
 
-Deploy the stack yourself with operator credentials. `deploy.sh` never touches it. Pick one of these commands:
+A deploy role can do one thing: run its stack's SSM document ([build once, deploy a tag](#build-once-deploy-a-tag)) on its own instance, with a `tag` that matches the document's `allowedPattern` (an image that `build.sh` already pushed), and read the result (`ssm:GetCommandInvocation`, `ssm:ListCommandInvocations`). It cannot run `AWS-RunShellScript`, touch the other environment's document or instance, push or pull images, change a stack, or read the backups. CI never uses CloudFormation: stack changes stay manual, with operator credentials, as in the sections above.
 
-```sh
-# Trust pushes to main (default), creating the account's GitHub OIDC provider
-aws cloudformation deploy --stack-name fernslop-github --template-file infra/github-oidc-stack.yaml \
-  --capabilities CAPABILITY_IAM
+The ECR push role is a separate role, in `ecr-stack.yaml` ([#235](../backlog/235-env-build-and-deploy-by-tag.md)). Only workflow runs on `main` can assume it, and it can only push to the repository. It trusts the provider that this stack owns, which is why the provider's ARN is a parameter of the ECR stack. The ECR stack's outputs `EcrPushRoleArn` and `RepositoryUri` become the repository variables `ECR_PUSH_ROLE_ARN` and `ECR_REPOSITORY_URI`, next to the repository-level `AWS_REGION`.
 
-# Trust only jobs that use the GitHub "production" environment
-aws cloudformation deploy --stack-name fernslop-github --template-file infra/github-oidc-stack.yaml \
-  --capabilities CAPABILITY_IAM --parameter-overrides TrustSubject=production-environment
+### One-time: replace the CloudFormation deploy role with the two environment roles
 
-# The account already has the provider (add TrustSubject=... as above if wanted)
-aws cloudformation deploy --stack-name fernslop-github --template-file infra/github-oidc-stack.yaml \
-  --capabilities CAPABILITY_IAM \
-  --parameter-overrides CreateOidcProvider=false ExistingOidcProviderArn=<arn>
-```
+Do this once, with operator credentials, from the repo root. The live stack has the provider, `CloudFormationRole` and `DeployRole`. The new template removes the two roles and adds `DevelopmentDeployRole` and `ProductionDeployRole`.
 
-An account can have only one provider for `token.actions.githubusercontent.com`. To check whether it already exists and get its ARN, run `aws iam list-open-id-connect-providers`.
+1. **Create a change set** (do not execute it yet). The old `TrustSubject` parameter is gone, so pass the others:
 
-`production-environment` only works once the `production` environment exists in the GitHub repository settings and the deploy job names it (`environment: production`). Until then, no job can assume the role.
+   ```sh
+   aws cloudformation create-change-set --stack-name fernslop-github --change-set-name env-roles \
+     --template-body file://infra/github-oidc-stack.yaml --capabilities CAPABILITY_IAM \
+     --parameters ParameterKey=AppPrefix,ParameterValue=fernslop \
+       ParameterKey=GitHubRepo,UsePreviousValue=true ParameterKey=CreateOidcProvider,UsePreviousValue=true \
+       ParameterKey=ExistingOidcProviderArn,UsePreviousValue=true
+   aws cloudformation wait change-set-create-complete --stack-name fernslop-github --change-set-name env-roles
+   aws cloudformation describe-change-set --stack-name fernslop-github --change-set-name env-roles \
+     --query "Changes[].ResourceChange.[Action,LogicalResourceId,Replacement]" --output table
+   ```
 
-Then set these GitHub repository variables, which the deploy workflow reads:
+   Expect exactly: `GitHubOidcProvider` is not in the list at all (it is not `Remove` and not a replacement), `CloudFormationRole` and `DeployRole` are `Remove`, `DevelopmentDeployRole` and `ProductionDeployRole` are `Add`. If the provider shows up, or anything else is removed, do not execute: delete the change set (`aws cloudformation delete-change-set --stack-name fernslop-github --change-set-name env-roles`) and report what it showed. Use the same `AppPrefix` as the app stacks.
 
-| Variable | Value |
-| --- | --- |
-| `AWS_DEPLOY_ROLE_ARN` | stack output `DeployRoleArn` |
-| `AWS_CFN_ROLE_ARN` | stack output `CloudFormationRoleArn`. The workflow passes it to `deploy.sh` as `CFN_ROLE_ARN`, which then adds `--role-arn` to its `cloudformation deploy` calls. Without it, `deploy.sh` runs exactly as before. |
-| `AWS_REGION` | the region of the stacks, e.g. `eu-west-2` |
+2. **Execute it.** The old CI deploy stops working from here, until [#238](../backlog/238-env-ci-build-and-deploy-dev.md) replaces it:
 
-```sh
-aws cloudformation describe-stacks --stack-name fernslop-github --query "Stacks[0].Outputs" --output table
-```
+   ```sh
+   aws cloudformation execute-change-set --stack-name fernslop-github --change-set-name env-roles
+   aws cloudformation wait stack-update-complete --stack-name fernslop-github
+   aws cloudformation describe-stacks --stack-name fernslop-github --query "Stacks[0].Outputs" --output table
+   aws iam list-open-id-connect-providers   # the token.actions.githubusercontent.com provider is still listed
+   ```
 
-Anyone who can push to `main`, or approve a `production` deployment, can change `ec2-stack.yaml`. That includes the instance role's policies. Protect that branch or environment accordingly.
+3. **Create the GitHub environments** `development` and `production` (repository Settings, Environments).
+
+4. **Restrict `production` to `main`:** in the `production` environment, set Deployment branches and tags to "Selected branches and tags" and add `main`. The prod role trusts the environment, not the branch, so this setting is what keeps other branches out of prod.
+
+5. **Set the variables** on each environment (Settings, Environments, Variables):
+
+   | Variable | `development` | `production` |
+   | --- | --- | --- |
+   | `AWS_DEPLOY_ROLE_ARN` | stack output `DevelopmentDeployRoleArn` | stack output `ProductionDeployRoleArn` |
+   | `AWS_REGION` | the region of the stacks, e.g. `eu-west-2` | the same |
+   | `INSTANCE_ID` | `InstanceId` output of the `fernslop` stack | `InstanceId` output of the `prod-fernslop` stack |
+   | `DEPLOY_DOCUMENT` | `DeployDocumentName` output of the `fernslop` stack (`fernslop-deploy`) | `DeployDocumentName` output of the `prod-fernslop` stack (`prod-fernslop-deploy`) |
+   | `PUBLIC_URL` | `https://` plus the `fernslop` stack's `DomainName` | `https://` plus the `prod-fernslop` stack's `DomainName` |
+
+   Production's values wait for [#237](../backlog/237-env-prod-stack-and-cutover.md), which creates the prod stack. Also set the repository variables `ECR_PUSH_ROLE_ARN`, `ECR_REPOSITORY_URI` and `AWS_REGION` from the `fernslop-ecr` stack's outputs. `INSTANCE_ID` changes when the instance is replaced: update the variable then.
+
+   ```sh
+   aws cloudformation describe-stacks --stack-name fernslop --query "Stacks[0].Outputs" --output table
+   aws cloudformation describe-stacks --stack-name fernslop-ecr --query "Stacks[0].Outputs" --output table
+   ```
+
+To create the stack in an account that has none (not the live one): `aws cloudformation deploy --stack-name fernslop-github --template-file infra/github-oidc-stack.yaml --capabilities CAPABILITY_IAM`. If the account already has a `token.actions.githubusercontent.com` provider (an account can have only one; `aws iam list-open-id-connect-providers`), add `--parameter-overrides CreateOidcProvider=false ExistingOidcProviderArn=<arn>`.
+
+Anyone who can push to `main` ships code to dev, and anyone who can run a `production` job ships a tag to prod. Protect `main` and the `production` environment accordingly.
 
 ## Database backups
 
