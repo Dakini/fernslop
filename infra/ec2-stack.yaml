@@ -61,6 +61,22 @@ Parameters:
     Default: "false"
     AllowedValues: ["true", "false"]
     Description: Set to true to run without DomainName, serving plain HTTP on the Elastic IP (no TLS).
+  ExistingEipAllocationId:
+    Type: String
+    Default: ""
+    AllowedPattern: "^(eipalloc-[0-9a-f]+)?$"
+    ConstraintDescription: empty, or an Elastic IP allocation id such as eipalloc-0123456789abcdef0
+    Description: >
+      Empty (the default) creates the stack's own Elastic IP. Set it to use an existing, unattached allocation
+      instead: it is not part of the stack, so deleting the stack does not release it. Needs ExistingEipAddress.
+  ExistingEipAddress:
+    Type: String
+    Default: ""
+    AllowedPattern: "^(((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])[.]){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9]))?$"
+    ConstraintDescription: empty, or an IPv4 address such as 203.0.113.10
+    Description: >
+      The address of ExistingEipAllocationId. CloudFormation cannot look it up from the id, and it is used for
+      PUBLIC_URL, the Url output and the ElasticIp output. Ignored when ExistingEipAllocationId is empty.
 
 Rules:
   DomainRequired:
@@ -71,9 +87,16 @@ Rules:
           DomainName is required (the site is served over HTTPS). To run plain HTTP on the Elastic IP
           instead, set AllowPlainHttp=true.
 
+  ExistingEipRequiresAddress:
+    RuleCondition: !Not [!Equals [!Ref ExistingEipAllocationId, ""]]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref ExistingEipAddress, ""]]
+        AssertDescription: ExistingEipAddress is required when ExistingEipAllocationId is set.
+
 Conditions:
   HasDomain: !Not [!Equals [!Ref DomainName, ""]]
   IsProd: !Equals [!Ref Environment, prod]
+  CreateElasticIp: !Equals [!Ref ExistingEipAllocationId, ""]
   HasAmiId: !Not [!Equals [!Ref AmiId, ""]]
 
 # Physical names: dev keeps exactly the names it had before environments existed (renaming the log group or
@@ -209,7 +232,8 @@ Resources:
         - { Key: App, Value: !Ref AppPrefix }
         - { Key: Environment, Value: !Ref Environment }
       UserData:
-        Fn::Base64: !Sub |
+        Fn::Base64: !Sub
+        - |
           #!/bin/bash
           # No -x: this script writes a generated Postgres password to disk. cloud-init logs to
           # /var/log/cloud-init-output.log.
@@ -365,7 +389,7 @@ Resources:
             PUBLIC_URL="https://${DomainName}"
           else
             SITE_ADDRESS=":80"
-            PUBLIC_URL="http://${ElasticIp}"
+            PUBLIC_URL="http://${PublicIp}"
           fi
           echo "POSTGRES_PASSWORD=$PGPASSWORD" > db.env
           {
@@ -470,6 +494,7 @@ Resources:
           systemctl daemon-reload
           systemctl enable --now fernslop-photo-cleanup.timer fernslop-room-purge.timer
           echo "=== bootstrap complete ==="
+        - PublicIp: !If [CreateElasticIp, !Ref ElasticIp, !Ref ExistingEipAddress]
 
   # The deploy procedure lives here, in the template, not in the workflow or script that triggers it. CI's role
   # may send this document and nothing else (infra/github-oidc-stack.yaml), so the worst a stolen token can do is
@@ -520,8 +545,10 @@ Resources:
                   docker compose up -d --pull always
                   docker image prune -f
 
+  # Created only when ExistingEipAllocationId is empty; otherwise that allocation is used and stays outside the stack
   ElasticIp:
     Type: AWS::EC2::EIP
+    Condition: CreateElasticIp
     Properties:
       Domain: vpc
       Tags:
@@ -531,7 +558,7 @@ Resources:
   ElasticIpAssociation:
     Type: AWS::EC2::EIPAssociation
     Properties:
-      AllocationId: !GetAtt ElasticIp.AllocationId
+      AllocationId: !If [CreateElasticIp, !GetAtt ElasticIp.AllocationId, !Ref ExistingEipAllocationId]
       InstanceId: !Ref Instance
 
   # Replaces the instance's hardware if the host under it fails (no notification target needed)
@@ -606,9 +633,13 @@ Resources:
 
 Outputs:
   Url:
-    Value: !If [HasDomain, !Sub "https://${DomainName}", !Sub "http://${ElasticIp}"]
+    Value: !If
+      - HasDomain
+      - !Sub "https://${DomainName}"
+      - !If [CreateElasticIp, !Sub "http://${ElasticIp}", !Sub "http://${ExistingEipAddress}"]
   ElasticIp:
-    Value: !Ref ElasticIp
+    Description: The instance's public address (the created Elastic IP, or ExistingEipAddress).
+    Value: !If [CreateElasticIp, !Ref ElasticIp, !Ref ExistingEipAddress]
   InstanceId:
     Value: !Ref Instance
   DashboardUrl:
