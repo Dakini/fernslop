@@ -626,8 +626,14 @@ paths:
         "429":
           description: |
             Too many writes from this client IP (see `TooManyRequests`), or the room already has 200
-            posts in the last 24 hours; then `Retry-After` counts until the oldest of them is 24 hours
-            old. Nothing is written. Message is `You're going a bit fast. Try again in N seconds.`
+            posts in the last 24 hours, or the request has a `photo_id` and the room already has
+            `FERNSLOP_PHOTO_POSTS_PER_DAY` (default 15) photo posts in the last 24 hours. This photo
+            cap keeps one room from filling the photo store (`FERNSLOP_PHOTO_STORAGE_LIMIT_BYTES`, see
+            `POST /photos`). Undone posts count toward both caps; text-only posts never hit the photo
+            cap, and `FERNSLOP_RATE_LIMIT=off` turns neither cap off. `Retry-After` counts until the
+            oldest counted post is 24 hours old. Nothing is written, and the uploaded photo stays
+            unposted (removed by the cleanup after 6 hours). Message is
+            `You're going a bit fast. Try again in N seconds.`
           headers:
             Retry-After:
               description: Whole seconds until a post may succeed.

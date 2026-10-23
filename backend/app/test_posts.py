@@ -288,3 +288,47 @@ def test_201st_post_in_a_room_within_24_hours_gives_429_and_writes_nothing(api, 
     notify.assert_called_once()  # only for the 200th
 
 
+# --- Daily photo post cap (#222) -------------------------------------------------
+
+
+def make_busy_room(store, now):
+    room = Room(id=str(uuid.uuid4()), name="Snappy", description="", region="", created_at=now, last_activity_at=now)
+    store.save_room(room)
+    return room
+
+
+def test_photo_post_past_the_daily_photo_cap_gives_429_and_writes_nothing(api, store, notify, monkeypatch):
+    monkeypatch.setenv("FERNSLOP_PHOTO_POSTS_PER_DAY", "2")
+    monkeypatch.setenv("FERNSLOP_RATE_LIMIT", "off")  # does not turn this cap off
+    now = timestamps.now()
+    room = make_busy_room(store, now)
+    store.save_feed_event(make_post(room.id, now - timedelta(hours=23), photo_url="/p/a.jpg", undone_at=now))
+    store.save_feed_event(make_post(room.id, now - timedelta(hours=25), photo_url="/p/old.jpg"))  # outside window
+    store.save_feed_event(make_post(room.id, now - timedelta(minutes=1)))  # text-only does not count
+    assert post(api, room.id, {"photo_id": upload_photo(api)["id"]}).status_code == 201
+    photo_id = upload_photo(api)["id"]
+    feed_before = store.list_feed_events(room.id)
+
+    response = post(api, room.id, {"photo_id": photo_id})
+
+    assert response.status_code == 429
+    retry_after = int(response.headers["Retry-After"])
+    assert 3500 < retry_after <= 3600  # until the undone photo post is 24 hours old
+    assert response.json() == {"message": f"You're going a bit fast. Try again in {retry_after} seconds."}
+    assert store.list_feed_events(room.id) == feed_before
+    assert not store.photo_url_in_feed(store.get_photo(photo_id).url)  # left for the 6-hour cleanup
+    notify.assert_called_once()  # only for the first photo post
+
+
+def test_text_post_in_a_room_at_the_default_photo_cap_still_gives_201(api, store):
+    now = timestamps.now()
+    room = make_busy_room(store, now)
+    for i in range(15):
+        store.save_feed_event(make_post(room.id, now - timedelta(minutes=1), photo_url=f"/p/{i}.jpg"))
+    assert post(api, room.id, {"photo_id": upload_photo(api)["id"]}).status_code == 429
+
+    response = post(api, room.id, {"text": "Still growing"})
+
+    assert response.status_code == 201
+
+

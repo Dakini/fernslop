@@ -473,6 +473,21 @@ class SqlStore:
         oldest = datetime.fromisoformat(row[1]) if row[1] is not None else None
         return int(row[0]), oldest
 
+    def count_photo_posts_since(self, room_id: str, since: datetime) -> tuple[int, datetime | None]:
+        """How many events with a photo the room has from ``since`` on (undone ones too), and the oldest one's time.
+
+        Only posts carry a ``photo_url``, so the indexed column alone picks photo posts (#222); one aggregate query.
+        """
+        c = _feed_events.c
+        with self._tx() as conn:
+            row = conn.execute(
+                select(func.count(), func.min(c.created_at)).where(
+                    c.room_id == room_id, c.created_at >= _stamp(since), c.photo_url.is_not(None)
+                )
+            ).one()
+        oldest = datetime.fromisoformat(row[1]) if row[1] is not None else None
+        return int(row[0]), oldest
+
     def get_feed_event(self, event_id: str) -> FeedEvent | None:
         return self._one(FeedEvent, _feed_events, _feed_events.c.id == event_id)
 
