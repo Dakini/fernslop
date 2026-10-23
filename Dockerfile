@@ -39,16 +39,16 @@ RUN uv sync --frozen --no-dev \
 COPY backend/app ./app
 COPY --from=frontend /frontend/dist/client ./static
 
-# The image tag (YYYYMMDD-HHMMSS-shortsha, passed by the build script) is reported as "version" by /api/health so
-# a deploy can tell the new container from an old one. Declared after the dependency and frontend layers, so a new
-# tag reuses their cache. Empty by default: /api/health then returns {"status": "ok"} as before.
-ARG FERNSLOP_IMAGE_TAG=""
-ENV FERNSLOP_IMAGE_TAG=$FERNSLOP_IMAGE_TAG
-
 RUN useradd --system --create-home --uid 10001 fernslop \
     && mkdir /data && chown fernslop /data
 USER fernslop
 EXPOSE 8000
+
+# The image tag (YYYYMMDD-HHMMSS-shortsha, passed by the build script) is reported as "version" by /api/health so
+# a deploy can tell the new container from an old one. Declared after every RUN and COPY, so a new tag reuses
+# all their cached layers. Empty by default: /api/health then returns {"status": "ok"} as before.
+ARG FERNSLOP_IMAGE_TAG=""
+ENV FERNSLOP_IMAGE_TAG=$FERNSLOP_IMAGE_TAG
 
 # The database is not baked in: pass FERNSLOP_DATABASE_URL (a SQLAlchemy URL) at run time, e.g.
 #   -e FERNSLOP_DATABASE_URL=sqlite:////data/fernslop.db -v fernslop-data:/data
