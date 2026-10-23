@@ -35,15 +35,14 @@ from sqlalchemy import (
     String,
     Table,
     Text,
-    and_,
     create_engine,
     delete,
     event,
     exists,
     func,
     insert,
-    or_,
     select,
+    tuple_,
     update,
 )
 from sqlalchemy.engine import make_url
@@ -450,9 +449,9 @@ class SqlStore:
                 ).first()
                 if anchor is None:
                     return []
-                where.append(
-                    or_(c.created_at < anchor.created_at, and_(c.created_at == anchor.created_at, c.seq < anchor.seq))
-                )
+                # A row-value comparison, not the equivalent OR form, so Postgres bounds the index scan
+                # on ``ix_feed_events_room_created_seq`` instead of filtering every newer row (#217).
+                where.append(tuple_(c.created_at, c.seq) < tuple_(anchor.created_at, anchor.seq))
             rows = conn.execute(
                 select(c.json).where(*where).order_by(c.created_at.desc(), c.seq.desc()).limit(limit)
             ).scalars()
