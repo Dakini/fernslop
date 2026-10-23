@@ -16,6 +16,7 @@ import type {
 } from "../types";
 import { FEED_PAGE_SIZE, ROOM_LIMITS } from "../types";
 import { SEED_PLANTS } from "./plants-seed";
+import { checkImage } from "../../lib/image";
 
 /** Server-side follow row: the token never leaves the "server". */
 export interface StoredFollow extends RoomFollow {
@@ -87,14 +88,6 @@ export interface MockOptions {
   random?: () => number;
   /** Sync changes across browser tabs (simulates realtime). */
   broadcast?: boolean;
-}
-
-const IMAGE_TYPES = ["image/jpeg", "image/png", "image/webp"];
-const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
-
-function checkImage(file: File) {
-  if (!IMAGE_TYPES.includes(file.type)) throw new Error("Please use a JPG, PNG or WebP image");
-  if (file.size > MAX_IMAGE_BYTES) throw new Error("That photo is over 5 MB");
 }
 
 function toDataUrl(file: File): Promise<string> {
@@ -390,8 +383,8 @@ export function createMockService(opts: MockOptions = {}): GardenService & { _db
       return wait(matches.slice(0, SEARCH_LIMIT));
     },
 
-    async identifyPlant(file) {
-      checkImage(file);
+    async identifyPlant(upload) {
+      const file = await checkImage(upload);
       // Mock: deterministic pseudo-candidates from the file name/size.
       let h = 0;
       for (const ch of file.name + file.size) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
@@ -486,8 +479,8 @@ export function createMockService(opts: MockOptions = {}): GardenService & { _db
       return wait(undefined);
     },
 
-    async uploadPhoto(file) {
-      checkImage(file);
+    async uploadPhoto(upload) {
+      const file = await checkImage(upload);
       const id = crypto.randomUUID();
       // A real backend would serve the bytes at /photos/{id}; the mock inlines them.
       const photo: StoredPhoto = { id, url: await toDataUrl(file), content_type: file.type, created_at: iso() };

@@ -1,5 +1,11 @@
 // Shrinks large photos in the browser before they are uploaded or identified (#209), so a
-// phone photo over the server's 5 MB limit still goes through. Browser APIs only.
+// phone photo over the server's 5 MB limit still goes through, then refuses what the server
+// would refuse (#211), so no request is sent for it. Browser APIs only.
+
+/** The server's upload limit and messages (backend/app/uploads.py). */
+export const MAX_UPLOAD_BYTES = 5 * 1024 * 1024;
+export const UNSUPPORTED_TYPE_MESSAGE = "Please use a JPG, PNG or WebP image";
+export const TOO_LARGE_MESSAGE = "That photo is over 5 MB";
 
 /** Files of this size or smaller are sent as they are. */
 export const RESIZE_OVER_BYTES = 1024 * 1024;
@@ -15,6 +21,36 @@ export type ImageInfo = {
   height: number;
   animated: boolean;
 };
+
+/** The image type the leading bytes say this is, or null; as the server's `sniff_image_type`. */
+export function sniffImageType(bytes: Uint8Array): string | null {
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff)
+    return "image/jpeg";
+  if (PNG_SIGNATURE.every((v, i) => bytes[i] === v)) return "image/png";
+  if (
+    bytes.length >= 12 &&
+    ascii(bytes, 0, 4) === "RIFF" &&
+    ascii(bytes, 8, 4) === "WEBP"
+  )
+    return "image/webp";
+  return null;
+}
+
+/**
+ * The file as the server will take it, typed by its bytes rather than its name or `file.type`.
+ * Throws an Error with the server's message for a file that is not a JPEG, PNG or WebP, whose
+ * header is broken, or that is over 5 MB.
+ */
+export async function checkImage(file: File): Promise<File> {
+  const header = await readBytes(file, HEADER_BYTES);
+  const type = sniffImageType(header);
+  // A file read whole whose header cannot be parsed is broken; a longer one is left to the server.
+  const broken =
+    type !== null && file.size <= HEADER_BYTES && !readImageInfo(header, type);
+  if (!type || broken) throw new Error(UNSUPPORTED_TYPE_MESSAGE);
+  if (file.size > MAX_UPLOAD_BYTES) throw new Error(TOO_LARGE_MESSAGE);
+  return retyped(file, type);
+}
 
 /** Dimensions, orientation and animation read from the start of a JPEG, PNG or WebP; null if unreadable. */
 export function readImageInfo(
@@ -47,17 +83,44 @@ export function resizeTarget(
 }
 
 /**
- * The file to upload: a still JPEG, PNG or WebP over 1 MB and over 2048 px is resized to 2048 px on
- * its longest side (JPEG stays JPEG; PNG/WebP keep transparency). Anything else, anything the
- * browser cannot decode or encode, and any result that is not smaller comes back unchanged.
+ * The file to upload, resized as `resizeImage` says and then checked by `checkImage`, which
+ * throws for a file the server would refuse, so no request is sent for it.
  */
 export async function prepareImage(file: File): Promise<File> {
+  const type = sniffImageType(await readBytes(file, 12));
+  // Typed by its bytes, so a PNG named .jpg resizes as a PNG; anything else is refused unread.
+  return checkImage(type ? await resizeImage(retyped(file, type)) : file);
+}
+
+/** The first `n` bytes. FileReader where `Blob.arrayBuffer` is missing (older Safari, jsdom). */
+function readBytes(file: Blob, n: number): Promise<Uint8Array> {
+  const part = file.slice(0, n);
+  if (typeof part.arrayBuffer === "function")
+    return part.arrayBuffer().then((b) => new Uint8Array(b));
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(new Uint8Array(r.result as ArrayBuffer));
+    r.onerror = () => reject(r.error);
+    r.readAsArrayBuffer(part);
+  });
+}
+
+function retyped(file: File, type: string): File {
+  return file.type === type
+    ? file
+    : new File([file], file.name, { type, lastModified: file.lastModified });
+}
+
+/**
+ * A still JPEG, PNG or WebP over 1 MB and over 2048 px is resized to 2048 px on its longest side
+ * (JPEG stays JPEG; PNG/WebP keep transparency). Anything else, anything the browser cannot
+ * decode or encode, and any result that is not smaller comes back unchanged.
+ */
+async function resizeImage(file: File): Promise<File> {
   if (file.size <= RESIZE_OVER_BYTES || typeof createImageBitmap !== "function")
     return file;
   try {
-    const header = new Uint8Array(
-      await file.slice(0, HEADER_BYTES).arrayBuffer(),
-    );
+    const header = await readBytes(file, HEADER_BYTES);
     const target = resizeTarget(readImageInfo(header, file.type), file.size);
     if (!target) return file;
 
@@ -129,6 +192,7 @@ function renamed(name: string, from: string, to: string): string {
 
 // --- Header parsing ----------------------------------------------------------
 
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 const u16be = (b: Uint8Array, i: number) => (b[i]! << 8) | b[i + 1]!;
 const u32be = (b: Uint8Array, i: number) =>
   ((b[i]! << 24) | (b[i + 1]! << 16) | (b[i + 2]! << 8) | b[i + 3]!) >>> 0;
