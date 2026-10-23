@@ -27,3 +27,5 @@
 - Dev's domain stays one level deep (Cloudflare certificate limits). Prod's Caddy gets its certificate only after the switch.
 
 **Orchestrator decision:** a short dev stop/start for the `DomainName` change is acceptable, since dev serves no users after the cutover. Still stop on `Replacement: True`.
+
+**Orchestrator decisions:** the dump may go through prod's own backup bucket with 15-minute presigned links, created with `uvx --from boto3` (no project dependency); delete every copy afterwards. Dev gets no backups after the cutover: [#242](parked/242-env-dev-backups.md).
