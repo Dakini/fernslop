@@ -5,6 +5,16 @@ import { createMockService, memoryStorage } from "./mockService";
 import { SEED_PLANTS } from "./plants-seed";
 
 const actor = { name: "Robin", device_id: "dev1" };
+// A 1x1 PNG header: enough for the browser-side image check.
+const PNG = new Uint8Array([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0,
+  0, 0, 0, 0, 0,
+]);
+const bigPng = () => {
+  const b = new Uint8Array(5 * 1024 * 1024 + 1);
+  b.set(PNG);
+  return new File([b], "big.png", { type: "image/png" });
+};
 const day = 86_400_000;
 
 function setup() {
@@ -265,10 +275,9 @@ describe("undo", () => {
 describe("identify, follow, realtime", () => {
   it("returns up to 3 candidates and rejects files over 5 MB", async () => {
     const { svc } = setup();
-    const ok = new File(["x"], "leaf.jpg", { type: "image/jpeg" });
+    const ok = new File([PNG], "leaf.jpg", { type: "image/jpeg" });
     expect((await svc.identifyPlant(ok)).length).toBeLessThanOrEqual(3);
-    const big = new File([new Uint8Array(5 * 1024 * 1024 + 1)], "big.jpg", { type: "image/jpeg" });
-    await expect(svc.identifyPlant(big)).rejects.toThrow();
+    await expect(svc.identifyPlant(bigPng())).rejects.toThrow("That photo is over 5 MB");
     const gif = new File(["x"], "a.gif", { type: "image/gif" });
     await expect(svc.identifyPlant(gif)).rejects.toThrow();
   });
@@ -292,14 +301,13 @@ describe("identify, follow, realtime", () => {
   it("stores uploaded photos and attaches them to posts by id", async () => {
     const { svc } = setup();
     const room = await svc.createRoom({ name: "R" });
-    const photo = await svc.uploadPhoto(new File(["hi"], "tomato.png", { type: "image/png" }));
-    expect(photo.url).toBe("data:image/png;base64,aGk=");
+    const photo = await svc.uploadPhoto(new File([PNG], "tomato.png", { type: "image/png" }));
+    expect(photo.url).toMatch(/^data:image\/png;base64,iVBORw0KGgo/);
     const ev = await svc.postUpdate(room.id, "", photo.id, actor);
     expect(ev.photo_url).toBe(photo.url);
     await expect(svc.postUpdate(room.id, "x", "missing", actor)).rejects.toThrow();
     await expect(svc.uploadPhoto(new File(["x"], "a.gif", { type: "image/gif" }))).rejects.toThrow();
-    const big = new File([new Uint8Array(5 * 1024 * 1024 + 1)], "big.jpg", { type: "image/jpeg" });
-    await expect(svc.uploadPhoto(big)).rejects.toThrow();
+    await expect(svc.uploadPhoto(bigPng())).rejects.toThrow();
   });
 
   it("notifies subscribers on change", async () => {

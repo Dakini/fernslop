@@ -1,10 +1,14 @@
 import { expect, it } from "vitest";
-import { readImageInfo, resizeTarget } from "./image";
+import { prepareImage, readImageInfo, resizeTarget } from "./image";
 
 const MB = 1024 * 1024;
 
 // Minimal file headers: just the bytes readImageInfo looks at.
-function png(width: number, height: number, chunks: string[]): Uint8Array {
+function png(
+  width: number,
+  height: number,
+  chunks: string[],
+): Uint8Array<ArrayBuffer> {
   const out = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
   const be32 = (n: number) => [
     n >>> 24,
@@ -48,6 +52,21 @@ it("resizes a large still image to 2048 px on its longest side and keeps small o
   expect(
     resizeTarget({ width: 2048, height: 1000, animated: false }, 4 * MB),
   ).toBeNull(); // already 2048 px
+});
+
+it("refuses HEIC bytes named .jpg and accepts a real PNG, typed by its bytes", async () => {
+  // An iPhone HEIC starts with an ISO-BMFF "ftypheic" box, whatever it is named.
+  const heic = new Uint8Array([
+    0, 0, 0, 24, 102, 116, 121, 112, 104, 101, 105, 99,
+  ]); // ....ftypheic
+  await expect(
+    prepareImage(new File([heic], "leaf.jpg", { type: "image/jpeg" })),
+  ).rejects.toThrow("Please use a JPG, PNG or WebP image");
+
+  const ok = await prepareImage(
+    new File([png(1, 1, ["IDAT"])], "leaf.jpg", { type: "image/jpeg" }),
+  );
+  expect(ok.type).toBe("image/png");
 });
 
 it("never resizes an animated PNG or WebP", () => {

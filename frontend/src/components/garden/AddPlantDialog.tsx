@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Camera, Loader2, Search } from "lucide-react";
+import { toast } from "sonner";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
@@ -40,7 +41,8 @@ export function AddPlantDialog({ open, onOpenChange, onPick }: { open: boolean; 
         setTab("search");
       } else setCandidates(c);
     } catch (e) {
-      if (!(e instanceof RateLimitError)) setNotice((e as Error).message);
+      // A refused photo or a server error is a toast, like the post photo's; RateLimitError already toasted.
+      if (!(e instanceof RateLimitError)) toast.error((e as Error).message);
     } finally {
       setBusy(false);
     }
