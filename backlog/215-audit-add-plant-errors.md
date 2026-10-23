@@ -29,3 +29,19 @@ Browser check (Playwright, Chromium) against the static build served by a local 
 - 400 `{"message":"Bad plant id"}`: one toast, "Bad plant id". No success toast and no `pageerror`.
 - Network failure (`route.abort`): one toast, "Couldn't reach the server. Check your connection and try again.". No success toast and no `pageerror`.
 The only console errors were the browser's own "Failed to load resource" lines for the failed requests. There were no unhandled rejections.
+
+## QA: PASS
+
+- [x] Rate limit used up: Add plant > pick shows the one rate-limit toast, no `pageerror`, no "planted" toast - PASS
+      Backend with `FERNSLOP_RATE_LIMIT_WRITE=1/minute`: added Basil, then picked Mint. Real 429. One new toast, "You're going a bit fast. Try again in 58 seconds.". There was no Mint "planted" toast and Mint was not on the canvas. There was no `pageerror`. The only console error was the browser's "Failed to load resource ... 429" line.
+- [x] A 400, 404 or network failure shows one error toast, no success toast and no unhandled rejection - PASS
+      Intercepted the add-plant POST with route interception. A 400 `{"message":"Bad plant id"}` showed one toast, "Bad plant id". A 404 `{"message":"Plant not found"}` showed one toast, "Plant not found". `route.abort()` showed one toast, "Couldn't reach the server. Check your connection and try again.". In all three cases there was no "planted" toast, Mint was not on the canvas, and there was no `pageerror`. The only console errors were the browser's "Failed to load resource" lines.
+- [x] A successful add still shows the "planted" toast and highlights the new plant - PASS
+      Picked Basil. One toast, "Basil planted — drag it into place". Basil was on the canvas with `animate-bob` and there was no page error.
+
+Other room actions were checked as before through `run()`, with no page errors:
+- Adding a Bed area: the area appeared.
+- Mark watered: "Watered!".
+- A 400 on adding a Pond area: one toast, "Bad area".
+
+Tests: `npm test` in `frontend/`, 9 files, 51 passed, 0 failed. Static build `FERNSLOP_STATIC=1 npm run build` succeeded. Browser check: Playwright (Chromium) via `uv run` from `e2e/`, against `uvicorn` on free ports with scratch SQLite. Nothing in the code was changed.
