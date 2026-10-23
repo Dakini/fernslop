@@ -35,16 +35,6 @@ BAD_PHOTO_MESSAGE = "That photo didn't upload — try again"
 PHOTO_IN_USE_MESSAGE = "That photo is already in a post"
 
 
-def _photo_in_a_post(store: StoreProtocol, photo_url: str) -> bool:
-    """Whether any post in any room (undone ones included) already shows this photo.
-
-    Reads every room's feed through ``StoreProtocol``; a store lookup by ``photo_url`` would be cheaper.
-    """
-    return any(
-        event.photo_url == photo_url for room in store.list_rooms() for event in store.list_feed_events(room.id)
-    )
-
-
 @router.post("/rooms/{room_id}/posts", operation_id="postUpdate", status_code=201, dependencies=[rate_limited(WRITE)])
 def post_update(
     room_id: str,
@@ -80,7 +70,8 @@ def post_update(
             photo = store.get_photo(photo_id)
             if photo is None:
                 raise ApiError(400, BAD_PHOTO_MESSAGE)
-            if _photo_in_a_post(store, photo.url):
+            # Any post shows it: other rooms, undone posts and soft-deleted rooms not yet purged.
+            if store.photo_url_in_feed(photo.url):
                 raise ApiError(400, PHOTO_IN_USE_MESSAGE)
             photo_url = photo.url
         elif not text:
