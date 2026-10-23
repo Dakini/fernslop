@@ -42,3 +42,26 @@ Local verification:
 - `docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:latest -color` printed nothing and exited 0.
 - `cd backend && uv sync --locked && uv run pytest` gave 183 passed, 2 skipped, 0 failed. Local Python was CPython 3.13.13 and uv found the lock up to date.
 - `cd frontend && npm ci && npm test` gave 10 test files, 56 tests passed, 0 failed. Local Node is v26.3.0 rather than 24, so the Node 24 run will only be confirmed by the first GitHub run.
+
+## QA: PASS
+
+- [x] Triggers are `pull_request` and `push` to `main` only, with `permissions: contents: read` and no secrets - PASS
+      The `on:` block has `pull_request:` and `push: branches: [main]`. Workflow-level `permissions: contents: read`. There are no `secrets.*` references, and the checkouts use `persist-credentials: false`
+- [x] Job `backend`: Python 3.13, uv 0.13.5, `uv sync --locked`, `uv run pytest`, in-memory SQLite - PASS
+      `setup-uv` sets `version: "0.13.5"` and `python-version: "3.13"`, which match `Dockerfile` lines 21-22. The working directory is `backend`. There is no `FERNSLOP_TEST_DATABASE_URL`, no services and no Docker
+- [x] Job `frontend`: Node 24, `npm ci`, `npm test` - PASS
+      The working directory is `frontend` and `setup-node` sets `node-version: "24"`
+- [x] No `needs:`, caches keyed on the lockfiles, no `continue-on-error`, each job has `timeout-minutes` - PASS
+      The uv cache uses `cache-dependency-glob: backend/uv.lock` and the npm cache uses `cache-dependency-path: frontend/package-lock.json`. Both jobs set `timeout-minutes: 15`
+- [x] Every `uses:` is pinned to a full SHA, with the tag in a trailing comment - PASS
+      `gh api repos/<owner>/<repo>/commits/<tag> --jq .sha` resolved `actions/checkout` v7.0.1 to 3d3c42e5…, `astral-sh/setup-uv` v10.3.2 to 07a047e6… and `actions/setup-node` v7.1.0 to 949feb24…. All three match the pins. `git ls-remote` also confirmed checkout v7.0.1
+- [x] `concurrency` is grouped by workflow and ref, and `cancel-in-progress` is true only for PRs - PASS
+      `group: ${{ github.workflow }}-${{ github.ref }}`, `cancel-in-progress: ${{ github.event_name == 'pull_request' }}`
+- [x] Verified locally; the engineer comment gives the run link or says no run happened - PASS
+      I re-ran actionlint through Docker. It printed nothing and exited 0. The backend suite passed when run the way the workflow runs it. The engineer comment says plainly that nothing was pushed and that no run link exists. It also flags that local Node was v26, not 24
+
+The constraints hold: `git diff main...HEAD` touches only `.github/workflows/ci.yaml` and this issue file. Workflow level holds only `permissions` and `concurrency`, and the job ids are `backend` and `frontend`.
+
+Not covered: no GitHub Actions run has happened, so the Node 24 frontend job and the setup-uv cache behaviour on a real runner are unconfirmed until the first push. I did not re-run the frontend suite; the engineer reports 56 passed.
+
+Tests: `docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:latest -color`, no output, exit 0. `cd backend && uv sync --locked && uv run pytest`, 183 passed, 2 skipped, 0 failed
