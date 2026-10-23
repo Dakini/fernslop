@@ -43,3 +43,22 @@ Deviations and findings for QA / the PM:
 - **`CFN_ROLE_ARN` is kept in `deploy.sh`.** [#236](236-env-iam-split-per-environment.md) removes the CloudFormation role, after which the variable is unused; I left it because this issue does not name it.
 - **The old "GitHub Actions deploy role" section of the README still describes `AWS-RunShellScript`;** [#236](236-env-iam-split-per-environment.md) rewrites it. `.github/workflows/ci.yaml` has no deploy job yet; [#238](238-env-ci-build-and-deploy-dev.md) adds it.
 - **The lifecycle's second rule uses `tagStatus: tagged` with pattern `*`** rather than `any`, so the 50 are counted over tagged images only.
+
+## QA: PASS
+
+- [x] `build.sh --print-tag` is offline and deterministic; dirty-tree refusal, skip-if-in-ECR, `--build-arg FERNSLOP_IMAGE_TAG`, push of `<repo>:<tag>` only, tag as last stdout line - PASS
+      `--print-tag` printed `20261023-191758-d68e693` for HEAD committed `2026-10-23T20:17:58+01:00` (= 19:17:58 UTC). Read the script: git formats the time (no `date` flags), the dirty-tree check, `describe-images` skip, a single `-t "$REPO:$TAG"`, docker output redirected to stderr, `echo "$TAG"` last. No build or push was run (user-only).
+- [x] `ec2-stack.yaml` has `<stack name>-deploy` SSM document with one `tag` parameter and the `allowedPattern`; ECR login, `APP_TAG` line, `compose up -d --pull always`, `image prune -f`; output gives the name - PASS
+      Read the document and the `DeployDocumentName` output. I ran its `.env` rewrite on a sample file: other lines kept, one `APP_TAG` line, mode 600.
+- [x] Compose app image is `<repo>:${APP_TAG}` from `/opt/app/.env`; no `:latest`; `ImageTag` parameter boots it; document replaces only the `APP_TAG=` line and fails clearly if the compose file lacks `${APP_TAG}` - PASS
+      The compose heredoc is quoted (`<<'COMPOSE'`), so `${APP_TAG}` reaches the file literally. `grep ':latest'` finds only comments and README prose, no image reference. `FERNSLOP_IMAGE_TAG` is not set at run time. The document's guard greps the compose file and exits 1 with a message.
+- [x] `deploy.sh <env> <tag>` refuses missing/bad/absent tags in one line before any change; no `docker build`; sends the stack's document, waits, requires `/api/health` `version == <tag>`; no ECR stack deploy; first creation passes `ImageTag=<tag>`, update keeps the previous one - PASS
+      Ran `deploy.sh dev` -> "Missing tag...", `deploy.sh dev latest` -> "Bad tag 'latest'...", `deploy.sh dev 20260101-000000-abcdef0` -> "Tag ... is not in ECR repository fernslop..." (real read-only `describe-images`); all exit 1. Read the create/update branches and the health loop. `--names` printed the right names for dev and prod, including `fernslop-deploy` and `prod-fernslop-deploy`.
+- [x] `ecr-stack.yaml`: IMMUTABLE, untagged expire after 1 day, keep last 50 tagged; push role limited to `refs/heads/main` of the repo, ECR push and `DescribeImages` on this repository only, no deploy rights; no OIDC provider resource; required `ExistingOidcProviderArn`; outputs `EcrPushRoleArn`, `RepositoryUri` - PASS
+      Read the template. `validate-template` lists `ExistingOidcProviderArn` as a parameter with no default. (Live `fernslop` ECR repo is still MUTABLE, as expected: the runbook is for the user to run.)
+- [x] `README.md` runbook: ECR change set (provider ARN from `list-open-id-connect-providers`), `build.sh`, create-then-execute the `fernslop` change set, edit the live compose to `:${APP_TAG}` in an SSM session, `deploy.sh dev <tag>`; each step has a check and covers older instance files - PASS
+      Read steps 1-6. The change set step says to expect `DeployDocument` Add with no Replacement. The engineer also reported an `Instance` Modify on `UserData` only, one stop/start. The issue asks for "no `Replacement`", not "no Modify", and the template has no `UserDataReplaceOnChange`. The README warns about it and says to run at a quiet time, so it is within the wording.
+- [x] `bash -n` and `shellcheck` on both scripts; `cfn-lint` on both templates - PASS
+      `bash -n infra/build.sh infra/deploy.sh`, `uvx --from shellcheck-py shellcheck infra/build.sh infra/deploy.sh`, `uvx cfn-lint infra/ec2-stack.yaml infra/ecr-stack.yaml`, `aws cloudformation validate-template` on both: all clean.
+
+Tests: none exist for this issue (config and scripts); the checks above are the commands run. No build, push, change set or deploy was run, and no code was changed.
