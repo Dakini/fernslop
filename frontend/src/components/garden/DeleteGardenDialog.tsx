@@ -13,6 +13,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
+import { RateLimitError } from "@/services/http/httpService";
 import { getServices } from "@/services";
 
 /**
@@ -42,7 +43,7 @@ export function DeleteGardenDialog({
     try {
       await getServices().deleteRoom(roomId);
     } catch (e) {
-      toast.error((e as Error).message);
+      if (!(e instanceof RateLimitError)) toast.error((e as Error).message);
       setPending(false);
       onPendingChange?.(false);
       return;

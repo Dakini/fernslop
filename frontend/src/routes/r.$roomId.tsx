@@ -20,6 +20,7 @@ import { plantsQuery, roomQuery, useRoomLive } from "@/lib/queries";
 import { nicknameError, saveNickname, useIdentity } from "@/lib/identity";
 import { allCareStatuses, CARE_LABELS, type CareStatus } from "@/services/care";
 import { getServices, CARE_TYPES, type CareType, type Photo, type Plant, type PlantCategory, type RoomPlant } from "@/services";
+import { RateLimitError } from "@/services/http/httpService";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/r/$roomId")({
@@ -94,7 +95,7 @@ function RoomPage() {
       await qc.invalidateQueries({ queryKey: ["room", roomId] });
       if (ok) toast.success(ok);
     } catch (e) {
-      toast.error((e as Error).message);
+      if (!(e instanceof RateLimitError)) toast.error((e as Error).message);
     }
   };
 
@@ -330,7 +331,7 @@ function PostBox({ onPost }: { onPost: (text: string, photoId: string | null) =>
     try {
       setPhoto(await getServices().uploadPhoto(f));
     } catch (e) {
-      toast.error((e as Error).message);
+      if (!(e instanceof RateLimitError)) toast.error((e as Error).message);
     } finally {
       setUploading(false);
     }
@@ -387,7 +388,8 @@ function FollowButton({ roomId }: { roomId: string }) {
         {done ? <p role="status" className="text-sm">Check your inbox: open the link we sent to confirm, and you'll get a weekly digest when this garden is busy. 🌱</p> : (
           <form className="space-y-2" onSubmit={async (e) => {
             e.preventDefault();
-            try { await getServices().followRoom(roomId, email); setDone(true); } catch (x) { setErr((x as Error).message); }
+            setErr(null);
+            try { await getServices().followRoom(roomId, email); setDone(true); } catch (x) { if (!(x instanceof RateLimitError)) setErr((x as Error).message); }
           }}>
             <Label htmlFor="follow-email">Email for weekly updates</Label>
             <Input id="follow-email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="rounded-full" />

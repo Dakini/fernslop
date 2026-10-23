@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toast } from "sonner";
-import { createHttpService } from "./httpService";
+import { createHttpService, RateLimitError, tooFastMessage } from "./httpService";
 import { getServices, setServices } from "../index";
 
 const actor = { name: "Zoë 🌿", device_id: "dev-1" };
@@ -99,14 +99,23 @@ describe("http GardenService", () => {
       }),
     );
 
-    await expect(svc.movePlant("rp1", 1, 2, actor)).rejects.toThrow(
-      "You're going a bit fast. Try again in 30 seconds.",
-    );
+    const err = await svc.movePlant("rp1", 1, 2, actor).catch((e) => e);
+    // Callers skip their own toast/inline copy for this one class (#214).
+    expect(err).toBeInstanceOf(RateLimitError);
+    expect(err.message).toBe("You're going a bit fast. Try again in 30 seconds.");
+    expect(toastError).toHaveBeenCalledTimes(1);
     expect(toastError).toHaveBeenCalledWith(
       "You're going a bit fast. Try again in 30 seconds.",
       { id: "rate-limit" },
     );
     toastError.mockRestore();
+  });
+
+  it("reads a Retry-After of an hour or more in hours, and shorter waits as before", () => {
+    expect(tooFastMessage("3600")).toBe("You're going a bit fast. Try again in 1 hour.");
+    expect(tooFastMessage("43200")).toBe("You're going a bit fast. Try again in 12 hours.");
+    expect(tooFastMessage("3599")).toBe("You're going a bit fast. Try again in 60 minutes.");
+    expect(tooFastMessage("30")).toBe("You're going a bit fast. Try again in 30 seconds.");
   });
 
   it("maps a bare 413 from the edge to the photo-size message on photo uploads only", async () => {
