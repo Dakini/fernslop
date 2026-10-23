@@ -26,3 +26,13 @@ One garden can't fill the 4 GiB photo store (#198) by posting photos. It takes a
 
 1. Default cap: **15 photo posts per garden per day** (user decision, 2026-10-23).
 2. Daily per-IP upload limit: the user wants it, filed as a separate follow-up issue.
+
+## Comments
+
+**Engineer:** Implemented in `backend/app/routers/posts.py`, `store.py`/`sql_store.py` and `openapi.yaml`.
+- New additive store method `count_photo_posts_since(room_id, since)`: one `COUNT`/`MIN(created_at)` query on the indexed `feed_events.photo_url IS NOT NULL` column (only posts carry a photo_url, so care/plant/area events never count), with no JSON match and no new column. Undone posts count.
+- `posts.py`: `_check_photo_post_cap` runs inside the existing transaction, only when `photo_id` is present, after #210's `_check_post_cap`. The cap comes from `FERNSLOP_PHOTO_POSTS_PER_DAY` (default 15), read on each request. It is independent of `FERNSLOP_RATE_LIMIT`. Both caps share one `_raise_if_full` helper that returns 429 with `TOO_FAST_MESSAGE` and a `Retry-After` until the oldest counted post is 24 hours old. Nothing is written, so the uploaded photo stays unposted for the 6-hour cleanup. `POST /photos`, `/identify` and the frontend/mock are unchanged.
+- `openapi.yaml`: `postUpdate`'s 429 describes the photo cap, its env var and default, and points to the storage limit.
+- Tests (2, in `test_posts.py`): with the env set to 2 and `FERNSLOP_RATE_LIMIT=off`, an undone photo post plus one new photo post means the next photo post gets 429, with `Retry-After`, nothing written and the photo left unposted. At the default of 15, a photo post gets 429 and a text-only post still gets 201.
+- Checks: `uv run pytest` gives 181 passed and 2 skipped, `uvx ruff check .` is clean, and `openapi.yaml` parses. `test_posts.py` and `test_sql_store.py` also pass on a throwaway Postgres 17 container (removed afterwards).
+- AC note: AC 1 still says "the 31st post", from the old default of 30. With the user's default of 15 it is the 16th photo post. I implemented 15 and left the AC text for the PM to update.
