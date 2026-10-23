@@ -72,6 +72,12 @@ def test_cors_allows_local_frontend_origins(client, origin):
     assert response.headers["access-control-allow-origin"] == origin
 
 
+def test_cors_exposes_retry_after_to_allowed_origins(client):
+    response = client.get(HEALTH, headers={"Origin": LOCAL_ORIGINS[0]})
+
+    assert "retry-after" in response.headers["access-control-expose-headers"].lower()
+
+
 def test_cors_rejects_unknown_origin(client):
     response = client.get(HEALTH, headers={"Origin": "https://evil.example"})
 

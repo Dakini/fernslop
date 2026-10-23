@@ -45,6 +45,8 @@ def create_app() -> FastAPI:
         allow_origins=cors_origins(),
         allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["content-type", "x-device-id", "x-actor-name"],
+        # Lets a cross-origin frontend read the wait on a 429.
+        expose_headers=["Retry-After"],
     )
     for router in routers:
         app.include_router(router, prefix=API_PREFIX)
