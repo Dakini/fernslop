@@ -4,7 +4,8 @@
 # new tag to its commit, e.g.:
 #   gh api repos/actions/checkout/commits/v7.0.1 --jq .sha
 #
-# Later jobs (deploy) go in the same `jobs:` map and can `needs:` the jobs below.
+# On a push to main, `build-and-push` and then `deploy-dev` follow the tests (infra/README.md, "CI: build and
+# deploy to dev"). Promoting to prod is a separate manual workflow.
 
 name: CI
 
@@ -150,3 +151,175 @@ jobs:
       - name: Stop the stack
         if: always()
         run: docker compose -f docker-compose.yaml -f .github/ci/compose.ci.yaml -p fernslop-ci down --volumes --remove-orphans
+
+  # Builds the arm64 image once for this commit and pushes it to ECR as <repo>:<tag> (infra/build.sh). It is the only
+  # job that builds or pushes. Its role can push to the one repository and nothing else, and it has no `environment:`.
+  build-and-push:
+    name: Build and push the image
+    needs: [backend, frontend, stack]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      tag: ${{ steps.build.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The same pin is used by every AWS job (promote.yaml too)
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.ECR_PUSH_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      # The instance is ARM, the runner is not
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # build.sh prints the tag as its last stdout line (everything else goes to stderr). It skips the push when the
+      # tag is already in ECR, so rerunning this job is safe. ECR_REPOSITORY_URI is optional: without it build.sh
+      # derives the repository from the account.
+      - name: Build and push
+        id: build
+        env:
+          ECR_REPOSITORY_URI: ${{ vars.ECR_REPOSITORY_URI }}
+        run: |
+          tag=$(infra/build.sh | tail -n 1)
+          if ! [[ "$tag" =~ ^[0-9]{8}-[0-9]{6}-[0-9a-f]{7}$ ]]; then
+            echo "::error::build.sh did not print an image tag: '$tag'"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Image tag: $tag" >> "$GITHUB_STEP_SUMMARY"
+
+  # Deploys the tag to dev through the SSM document, proves it is live, and only then moves the `deployed-dev` tag
+  # to this commit. The role can send that one document to that one instance; no job calls CloudFormation or
+  # build.sh. Nothing is rolled back on a failure. The `development` environment holds AWS_DEPLOY_ROLE_ARN,
+  # INSTANCE_ID, DEPLOY_DOCUMENT and PUBLIC_URL.
+  deploy-dev:
+    name: Deploy to dev
+    needs: [build-and-push]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: development
+    permissions:
+      id-token: write
+      contents: write
+    env:
+      TAG: ${{ needs.build-and-push.outputs.tag }}
+      AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      INSTANCE_ID: ${{ vars.INSTANCE_ID }}
+      DEPLOY_DOCUMENT: ${{ vars.DEPLOY_DOCUMENT }}
+      PUBLIC_URL: ${{ vars.PUBLIC_URL }}
+    steps:
+      - name: Check the settings
+        run: |
+          missing=""
+          for name in AWS_DEPLOY_ROLE_ARN AWS_REGION INSTANCE_ID DEPLOY_DOCUMENT PUBLIC_URL; do
+            if [ -z "${!name}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Empty variables (the development environment, and AWS_REGION on the repo):$missing"
+            exit 1
+          fi
+          if ! [[ "$TAG" =~ ^[0-9]{8}-[0-9]{6}-[0-9a-f]{7}$ ]]; then
+            echo "::error::build-and-push gave no valid image tag: '$TAG'"
+            exit 1
+          fi
+
+      # Only for the deployed-dev tag at the end. The push uses this job's token, not stored credentials.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ env.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # `aws ssm wait` gives up after 100 seconds, so poll. The first lookup can fail until SSM knows the command.
+      - name: Run the deploy document
+        run: |
+          command_id=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "$DEPLOY_DOCUMENT" \
+            --parameters "tag=$TAG" \
+            --query 'Command.CommandId' --output text)
+          echo "Command $command_id: $DEPLOY_DOCUMENT with tag $TAG on $INSTANCE_ID"
+
+          status=""
+          for _ in $(seq 1 180); do
+            status=$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$INSTANCE_ID" \
+              --query Status --output text 2> /dev/null || true)
+            case "$status" in
+              Pending | InProgress | Delayed | "") sleep 10 ;;
+              *) break ;;
+            esac
+          done
+
+          echo "Status: ${status:-unknown}"
+          echo "--- stdout"
+          aws ssm get-command-invocation --command-id "$command_id" --instance-id "$INSTANCE_ID" \
+            --query StandardOutputContent --output text || true
+          if [ "$status" != "Success" ]; then
+            echo "--- stderr"
+            aws ssm get-command-invocation --command-id "$command_id" --instance-id "$INSTANCE_ID" \
+              --query StandardErrorContent --output text || true
+            echo "::error::The deploy document ended with status '${status:-unknown}'"
+            exit 1
+          fi
+
+      # The old container answers /api/health too, so only the tag proves the new one is serving
+      - name: Wait for dev to report the tag
+        run: |
+          url="${PUBLIC_URL%/}/api/health"
+          body="$RUNNER_TEMP/health.json"
+          for i in $(seq 1 24); do
+            rm -f "$body"
+            code=$(curl -sS -o "$body" -w '%{http_code}' --max-time 5 "$url" || true)
+            echo "attempt $i: HTTP $code"
+            if [ "$code" = "200" ] && jq -e --arg tag "$TAG" '.version == $tag' "$body" > /dev/null 2>&1; then
+              echo "$url reports $TAG"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::$url did not report version $TAG within about 2 minutes. Last body:"
+          cat "$body" 2> /dev/null || echo "(none)"
+          exit 1
+
+      # Read-only on purpose: dev holds a copy of real data and the write routes have per-IP limits
+      - name: Smoke test
+        run: |
+          base="${PUBLIC_URL%/}"
+          curl -sS -o /dev/null -D "$RUNNER_TEMP/index.headers" -w 'GET / -> HTTP %{http_code}\n' \
+            --max-time 10 --fail "$base/"
+          if ! grep -qi '^content-type: *text/html' "$RUNNER_TEMP/index.headers"; then
+            echo "::error::GET / did not return HTML"
+            exit 1
+          fi
+          curl -sS -o "$RUNNER_TEMP/plants.json" -w 'GET /api/plants -> HTTP %{http_code}\n' \
+            --max-time 10 --fail "$base/api/plants"
+          if ! jq -e 'type == "array" and length > 0' "$RUNNER_TEMP/plants.json" > /dev/null; then
+            echo "::error::GET /api/plants did not return a non-empty array"
+            exit 1
+          fi
+          echo "Smoke test passed"
+
+      # Reached only when the deploy, the health check and the smoke test all passed. promote.yaml reads this tag.
+      - name: Mark this commit as deployed to dev
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          git tag -f deployed-dev
+          git push -f "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" deployed-dev
+          echo "deployed-dev is now $GITHUB_SHA (image $TAG)" >> "$GITHUB_STEP_SUMMARY"
