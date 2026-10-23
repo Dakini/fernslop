@@ -27,3 +27,26 @@
 - Environment is `deploy.sh`'s first argument, the domain moves to `DOMAIN=` so #235 can add `<tag>`; keep the build, `:latest`, `ALLOW_PLAIN_HTTP` and `CFN_ROLE_ARN` as they are
 - For dev, keep every physical name and the security group description identical: changing one replaces the resource
 - Agents run only read-only AWS commands (validate, describe); the user creates and executes every change set. `cfn-lint` runs via `uvx`, not added to `pyproject.toml`
+
+## Engineer:
+
+Changed only `infra/deploy.sh`, `ec2-stack.yaml`, `ecr-stack.yaml` and `README.md`. No tests: this is config and a script.
+
+- **deploy.sh:** `infra/deploy.sh <dev|prod> [--names]`, `APP_PREFIX` (default `fernslop`), `DOMAIN=`. `--names` exits before any AWS or git call. Missing/unknown environment, a bad prefix and a `DOMAIN` that differs from the stack's `DomainName` each exit 1 with one line. Build, `:latest`, `ALLOW_PLAIN_HTTP` and `CFN_ROLE_ARN` unchanged.
+- **Names:** dev `fernslop`, `fernslop-ecr`, `/fernslop/app`, dashboard `fernslop`, `Name=fernslop`, repo `fernslop`; prod `prod-fernslop`, `/prod-fernslop/app`, same shared repo and ECR stack. Security group description untouched.
+- **Templates:** new parameters `AppPrefix` (pattern-checked), `Environment` (dev/prod) and `AmiId`. `ImageId` is `AmiId` when set, else `LatestAmiId`. On update, `deploy.sh` passes the stack's previous `AmiId`, or the running instance's `ImageId` if there is none. CI's deploy role has no `ec2:DescribeInstances`, so this works for CI only after the runbook has set `AmiId`.
+- **Tags:** `App`/`Environment` on LogGroup, SecurityGroup, InstanceRole, BackupBucket, Instance, ElasticIp, both alarms and the ECR repo. InstanceProfile, BucketPolicy, EIPAssociation and Dashboard take no tags.
+- **Backups:** the script sends `--dimensions Environment=<env>`; `BackupMissingAlarm` and the dashboard widget read that dimension.
+- **Runbook:** "One-time: move today's stacks onto the parameterised templates" in `infra/README.md`. Order: SSM patch of the backup script plus one backup run, ECR change set, EC2 change set (pins the current AMI), checks, then execute at a quiet time with about a minute of downtime.
+- **Checks:** `uvx cfn-lint` 1.58.0 passes on both templates; `aws cloudformation validate-template` passes on both; `bash -n` ok; `--names` for dev/prod/a fork prefix and every refusal checked by hand (the `DOMAIN` one against the live stack, read-only).
+
+Deviations and findings for QA / the PM:
+
+- **The ECR repo is tagged `Environment=shared`, not `<env>`.** It is one repo for both environments, so tagging it with whichever env deployed last would flip the tag back and forth.
+- **The live `fernslop` stack is behind the repo (read-only `get-template`/`list-stack-resources`).** It has no `BackupBucket`, `BackupBucketPolicy`, `BackupMissingAlarm` or `AllowPlainHttp` parameter, and older UserData (unpinned compose/images, a single `.env`, no Caddy limits/headers). So:
+  - the dev instance has no `/usr/local/bin/fernslop-backup` for step 1 to patch (the runbook handles that case);
+  - the EC2 change set will also show those resources as `Add`;
+  - `BackupMissingAlarm` will go to ALARM a day after the update, because UserData does not re-run on a stop/start, so backups, the hardened compose file and the Caddy config never reach this instance.
+  
+  Getting them onto the dev instance (a manual install or a planned replacement) is outside #234 and needs its own issue.
+- **CI permissions until #236.** The new tags need tag permissions on the CloudFormation role; it already has them for every resource type used here (`ecr:TagResource`, `iam:TagRole`, `s3:PutBucketTagging`, `logs:TagResource`, `cloudwatch:TagResource`, `ec2:CreateTags`). Nothing here needs `github-oidc-stack.yaml` changes for dev.
