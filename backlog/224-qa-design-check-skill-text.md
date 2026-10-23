@@ -12,3 +12,7 @@ Section 1 of `.claude/skills/design-check/SKILL.md` describes `_docs/design-syst
 ## Constraints
 
 - Change only section 1 of `.claude/skills/design-check/SKILL.md`. No tests.
+
+## Engineer:
+
+Rewrote section 1 of `.claude/skills/design-check/SKILL.md`. The Django line is gone. The first bullet now says to read `_docs/design-system.md` first, because it describes the React, Tailwind and shadcn frontend: tokens, components and layout rules. The second bullet keeps `styles.css` and `components/ui/` as the source of truth, notes that the doc itself says the code wins, and keeps the instruction to report any disagreement between doc and code. The third bullet (issue acceptance criteria) is unchanged. `grep -ni django .claude/skills/design-check/SKILL.md` returns nothing. Docs only, so no tests.
