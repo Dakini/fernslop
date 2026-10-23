@@ -1,0 +1,11 @@
+# CI-only override for docker-compose.yaml, used by the `stack` job in .github/workflows/ci.yaml:
+#
+#   docker compose -f docker-compose.yaml -f .github/ci/compose.ci.yaml -p fernslop-ci up -d --build --wait
+#
+# It publishes Postgres on the loopback interface only, so the backend suite can run against the stack's
+# Postgres (in a separate fernslop_test database). Plain `docker compose up` does not read this file.
+
+services:
+  db:
+    ports:
+      - "127.0.0.1:55432:5432"
