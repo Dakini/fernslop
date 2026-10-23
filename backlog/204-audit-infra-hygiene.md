@@ -46,3 +46,28 @@ Checks:
 - I ran the compose-install lines from the template on `amazonlinux:2023` arm64. They install `Docker Compose version v5.6.1`, and with one hash character changed they print `FAILED` and exit 1 without installing.
 
 Not checked: a real boot on EC2 (no deploy) and `aws cloudformation validate-template`. The x86_64 branch was checked against the official checksums but not run. Moving an existing instance from `.env` to the new files is #208.
+
+## QA: PASS
+
+- [x] Images pinned by multi-arch index digest, arm64 build, bump comment - PASS
+      `docker buildx imagetools inspect --raw` on all five pins (node:24-slim, python:3.13-slim, uv:0.13.5, postgres:17-alpine, caddy:2-alpine) returns an OCI image index that includes linux/amd64 and linux/arm64, and each is the tag's current digest. Bump comments are in the `Dockerfile` and the stack. `docker buildx build --platform linux/arm64` succeeds.
+- [x] Fixed compose version, SHA-256 checked per architecture, mismatch stops boot - PASS
+      v5.6.1 is pinned. Both hashes match the official v5.6.1 `checksums.txt` and the per-file `.sha256` assets: x86_64 `47737f42…db8c0` and aarch64 `42cfa75f…1347d`. `sha256sum -c` runs under `set -euo pipefail`, and an unknown arch exits 1. I did not run a real EC2 boot.
+- [x] Each service gets only its own variables, files mode 600 - PASS
+      I rendered the compose and env sections from the template with and without `DomainName` and ran `docker compose config`. caddy gets `{SITE_ADDRESS}` only. db gets POSTGRES_USER, POSTGRES_DB and POSTGRES_PASSWORD. app gets FERNSLOP_DATABASE_URL, FERNSLOP_PUBLIC_URL, FERNSLOP_API_DOCS=0 and FORWARDED_ALLOW_IPS. db.env, app.env and caddy.env are `-rw-------` even when the outer umask is 022. Nothing else in the template still reads `.env`.
+- [x] No test_*.py or conftest.py in the image, and the app starts - PASS
+      In the arm64 image, `find /app -name 'test_*'` and `find /app -name conftest.py` print nothing. The container starts and serves `/api/health` and `/`.
+- [x] /api/health checks SELECT 1 with a short timeout, bypasses the locks, works on SQLite - PASS
+      Throwaway compose project `qa204health` on port 18304, using pinned postgres and the arm64 image:
+      - DB up: 200 `{"status":"ok"}` in 6 ms.
+      - Another session holds `pg_advisory_xact_lock(7130001)`: health returns 200 in 14 ms, while `/api/rooms` blocks until it times out after 4 s.
+      - `docker compose pause db`: 503 `{"message":"The database is not answering."}` in 3.0 s.
+      - db stopped: 503 in 7 ms.
+      - db restarted: 200 again.
+      - SQLite (`sqlite:////tmp/qa.db`): 200, and the SPA serves 200.
+- [x] Tests: health 200 and health 503 when the database is unreachable - PASS
+      `test_health_returns_ok` and `test_health_returns_503_when_the_database_is_unreachable` are in `app/test_main.py`.
+
+Tests: `cd backend && uv sync && uv run pytest`: 167 passed, 2 skipped, 0 failed. `uvx ruff check .`: all checks passed. `uvx cfn-lint infra/ec2-stack.yaml`: clean (exit 0).
+
+Not checked: a real EC2 boot or deploy, and running the x86_64 install branch. Every throwaway container, volume, network and image was removed. The local stack on :8000 was not touched.
