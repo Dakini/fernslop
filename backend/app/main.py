@@ -25,13 +25,19 @@ def cors_origins() -> list[str]:
     return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
 
+def api_docs_enabled() -> bool:
+    """Swagger UI, ReDoc and the OpenAPI JSON are served unless FERNSLOP_API_DOCS=0 (production)."""
+    return os.environ.get("FERNSLOP_API_DOCS", "1").strip() != "0"
+
+
 def create_app() -> FastAPI:
+    docs = api_docs_enabled()
     app = FastAPI(
         title="Fernslop API",
         version="0.1.0",
-        docs_url=f"{API_PREFIX}/docs",
-        redoc_url=f"{API_PREFIX}/redoc",
-        openapi_url=f"{API_PREFIX}/openapi.json",
+        docs_url=f"{API_PREFIX}/docs" if docs else None,
+        redoc_url=f"{API_PREFIX}/redoc" if docs else None,
+        openapi_url=f"{API_PREFIX}/openapi.json" if docs else None,
     )
     register_error_handlers(app)
     app.add_middleware(

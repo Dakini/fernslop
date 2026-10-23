@@ -1,4 +1,7 @@
 import pytest
+from fastapi.testclient import TestClient
+
+from app.main import create_app
 
 HEALTH = "/api/health"
 LOCAL_ORIGINS = [
@@ -36,6 +39,16 @@ def test_openapi_json_is_served_under_the_api_prefix(client):
 
     assert response.status_code == 200
     assert response.json()["info"]["title"] == "Fernslop API"
+
+
+@pytest.mark.parametrize("path", ["/api/docs", "/api/redoc", "/api/openapi.json"])
+def test_api_docs_flag_off_hides_docs_with_404(reset_store, monkeypatch, path):
+    monkeypatch.setenv("FERNSLOP_API_DOCS", "0")
+    client = TestClient(create_app())
+
+    response = client.get(path)
+
+    assert response.status_code == 404
 
 
 # --- CORS --------------------------------------------------------------------

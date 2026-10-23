@@ -1,6 +1,25 @@
-# [audit] Follow-up: apply stack file changes to the running instance
-**What:** Make `infra/deploy.sh`, for an existing stack, write the current compose file, Caddyfile, env files and systemd timers to `/opt/app` on the running instance (e.g. through SSM) and restart what changed, instead of relying on EC2 user data, which only runs on first boot.
-**Why:** Found while grooming #195, #197, #198, #203 and #204: all change files the user-data script writes, and a CloudFormation update to `UserData` does not re-run it on the existing instance, so none of them would reach the deployed site short of replacing the instance, which loses the database.
-**Edge cases:** Keep the generated Postgres password, never regenerate it; no secret in SSM command history or CloudWatch; Caddy's certificate volume survives; one source of truth for the files (e.g. move them from the template into `infra/`); a failed step leaves the old setup running; take a backup (#197) before the first run.
+# [audit] Apply stack file changes to the running instance
 
-**User decision (2026-10-22):** there is no live deployment whose data matters, so the infra issues (195, 197, 198, 203, 204) can be verified on the template or a fresh stack and do not wait for this issue.
+## Goal
+
+`infra/deploy.sh` gets the current compose file, Caddyfile, backup script and systemd units onto an existing instance and restarts what changed, so changes like #195, #197, #198, #203 and #204 reach a running site without replacing the instance (EC2 user data runs only on first boot).
+
+## Acceptance criteria
+
+- [ ] Those files live once, as plain files under `infra/` (e.g. `infra/instance/`); the template no longer inlines them, and both a new stack and an update get them from there.
+- [ ] On an existing stack, `deploy.sh` writes them to `/opt/app` and `/etc/systemd/system`, reloads systemd, enables the timers and runs `docker compose up -d`, so only changed services restart.
+- [ ] The generated `.env` (Postgres password) is created only if missing and never regenerated; no secret appears in SSM command parameters, output or CloudWatch.
+- [ ] The `pgdata` and `caddy_data` volumes survive: after a run the gardens are still there and Caddy keeps its certificate.
+- [ ] The new files are validated first (`docker compose config`, `caddy validate`); on a failure nothing is replaced, the old setup keeps running and `deploy.sh` exits non-zero.
+- [ ] On an existing stack `deploy.sh` runs a backup (#197) and waits for it before changing anything; a failed backup stops the deploy.
+- [ ] Verified on a throwaway stack: create it, change the Caddyfile and a timer, re-run `deploy.sh`, both changes are live and a test garden is still there; `infra/README.md` says how it works.
+
+## Out of scope
+
+- None.
+
+## Constraints
+
+- `infra/deploy.sh`, `infra/ec2-stack.yaml`, new `infra/instance/`, `infra/README.md`. After #203 and #204 (they change the same files). No app code.
+
+**Open questions (user):** (1) There is no live deployment whose data matters (2026-10-22), so replacing the instance works today: park this until there is, or do it now? (2) If now, may the engineer and QA create and delete a throwaway AWS stack to verify it (small cost)?

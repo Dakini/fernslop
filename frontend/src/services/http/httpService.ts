@@ -28,6 +28,8 @@ export function tooFastMessage(retryAfter: string | null): string {
   }
   return `You're going a bit fast. Try again in ${wait}.`;
 }
+/** Caddy rejects an oversize body with a bare 413 before it reaches the app. */
+const PHOTO_TOO_LARGE = "That photo is over 5 MB";
 
 export function createHttpService(
   opts: { baseUrl?: string } = {},
@@ -59,7 +61,8 @@ export function createHttpService(
     return res;
   }
 
-  async function errorFrom(res: Response): Promise<Error> {
+  /** `photo`: the request was a photo upload, so a bare 413 (from Caddy) means the photo is too big. */
+  async function errorFrom(res: Response, photo = false): Promise<Error> {
     if (res.status === 429) {
       const message = tooFastMessage(res.headers.get("Retry-After"));
       toast.error(message, { id: RATE_LIMIT_TOAST_ID });
@@ -72,12 +75,17 @@ export function createHttpService(
     } catch {
       /* non-JSON body */
     }
+    if (photo && res.status === 413) return new Error(PHOTO_TOO_LARGE);
     return new Error(GENERIC_ERROR);
   }
 
-  async function json<T>(path: string, init: RequestInit = {}): Promise<T> {
+  async function json<T>(
+    path: string,
+    init: RequestInit = {},
+    photo = false,
+  ): Promise<T> {
     const res = await send(path, init);
-    if (!res.ok) throw await errorFrom(res);
+    if (!res.ok) throw await errorFrom(res, photo);
     if (res.status === 204) return undefined as T;
     try {
       return (await res.json()) as T;
@@ -133,7 +141,7 @@ export function createHttpService(
     listPlants: () => json("/plants"),
     searchPlants: (query) =>
       json(`/plants/search?q=${encodeURIComponent(query)}`),
-    identifyPlant: (file) => json("/plants/identify", upload(file)),
+    identifyPlant: (file) => json("/plants/identify", upload(file), true),
 
     addPlant: (roomId, plantId, actor) =>
       json(
@@ -173,7 +181,7 @@ export function createHttpService(
       }),
 
     async uploadPhoto(file) {
-      const photo = await json<Photo>("/photos", upload(file));
+      const photo = await json<Photo>("/photos", upload(file), true);
       return { ...photo, url: photoUrl(photo.url) };
     },
     async postUpdate(roomId, text, photoId, actor) {

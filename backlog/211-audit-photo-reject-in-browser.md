@@ -1,4 +1,23 @@
-# [audit] Follow-up: reject wrong-type and oversized photos in the browser, and show identify errors as a toast
-**What:** Before `uploadPhoto` and `identifyPlant` send anything, check the file in the browser: over 5 MB shows `That photo is over 5 MB`, anything that is not really a JPEG, PNG or WebP (check the first bytes, not the name or `file.type`, so a HEIC renamed to `.jpg` is caught) shows `Please use a JPG, PNG or WebP image`. Show the identify error as a toast like the post photo does (today it is the inline status note in the Add plant dialog).
-**Why:** Found while verifying #190 on the docker stack (Chromium 1280×800 and 390×844). The messages are already right, but they come from the server's 413/415, so Chromium logs `Failed to load resource: ... 413 (Content Too Large)` / `415 (Unsupported Media Type)` as a console error on every rejected file, and a phone uploads the whole file over a slow connection before learning it was too big. #190 asks for a toast and no console error for both inputs.
-**Edge cases:** The server checks stay as they are (the browser check is only a shortcut); the mock service already checks `file.type` and size, so share one helper; with #209 a large JPEG should be compressed rather than rejected, so do size after compression; keep the inline note for the "We couldn't be sure" case if the designer prefers it inside the dialog.
+# [audit] Reject wrong-type and oversized photos in the browser, and show identify errors as a toast
+
+## Goal
+
+A photo the server would refuse is caught in the browser before anything is sent, so a phone does not upload a whole file to learn it is too big and Chromium logs no `413`/`415` console error, and identify errors appear as a toast like the post photo's (found while verifying #190).
+
+## Acceptance criteria
+
+- [ ] In both the post photo and the Add plant photo input, a file whose first bytes are not JPEG, PNG or WebP (a HEIC renamed `.jpg`, a GIF, a text file) shows the toast `Please use a JPG, PNG or WebP image` and sends no request, whatever its name or `file.type`.
+- [ ] A file still over 5 MB after #209's resizing shows the toast `That photo is over 5 MB` and sends no request.
+- [ ] Neither case logs a console error in Chromium.
+- [ ] Identify failures (these checks and server errors) show as a toast; the low-confidence `We couldn't be sure — try searching instead` note stays inline in the dialog.
+- [ ] The mock service checks through the same helper, so the messages live in one place; the server's checks are unchanged.
+- [ ] Tests: the helper refuses HEIC bytes named `.jpg` and accepts a real PNG; one e2e that a renamed HEIC shows the toast with no request.
+
+## Out of scope
+
+- None.
+
+## Constraints
+
+- `frontend/src/lib/image.ts` (extend #209's `prepareImage`), `routes/r.$roomId.tsx` (`PostBox`), `components/garden/AddPlantDialog.tsx`, `services/mock/mockService.ts`, `e2e/`. Magic bytes as in `backend/app/uploads.py` `sniff_image_type`.
+- After #209 and #214 (same files). At most 3 tests.

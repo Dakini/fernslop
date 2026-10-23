@@ -109,6 +109,18 @@ describe("http GardenService", () => {
     toastError.mockRestore();
   });
 
+  it("maps a bare 413 from the edge to the photo-size message on photo uploads only", async () => {
+    const svc = createHttpService();
+    const file = new File(["x"], "big.jpg", { type: "image/jpeg" });
+    fetchMock.mockImplementation(async () => new Response("", { status: 413 }));
+
+    await expect(svc.uploadPhoto(file)).rejects.toThrow("That photo is over 5 MB");
+    await expect(svc.identifyPlant(file)).rejects.toThrow("That photo is over 5 MB");
+    await expect(svc.postUpdate("r", "hi", null, actor)).rejects.toThrow(
+      "Something went wrong. Please try again.",
+    );
+  });
+
   it("subscribe opens an EventSource, fires onChange per change event only, and closes", () => {
     const listeners: Record<string, () => void> = {};
     const close = vi.fn();
