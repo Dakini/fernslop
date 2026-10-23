@@ -1,0 +1,312 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Fernslop - an IAM role GitHub Actions assumes through OIDC (no long-lived keys) to run infra/deploy.sh
+  against the fernslop-ecr and fernslop stacks, plus the CloudFormation service role those stack updates run
+  as. Deployed once by an operator as stack fernslop-github (infra/README.md); deploy.sh never touches it.
+
+Parameters:
+  GitHubRepo:
+    Type: String
+    Default: Dakini/fernslop
+    Description: owner/name of the repository whose workflows may assume the deploy role
+  TrustSubject:
+    Type: String
+    Default: main
+    AllowedValues: [main, production-environment]
+    Description: >
+      main trusts jobs running on refs/heads/main. production-environment trusts only jobs that use the
+      GitHub "production" environment (it must exist and the deploy job must name it).
+  CreateOidcProvider:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >
+      false when the account already has the token.actions.githubusercontent.com provider (an account can
+      only have one); then set ExistingOidcProviderArn.
+  ExistingOidcProviderArn:
+    Type: String
+    Default: ""
+    Description: ARN of the existing GitHub OIDC provider (aws iam list-open-id-connect-providers)
+
+Rules:
+  ProviderArnRequired:
+    RuleCondition: !Equals [!Ref CreateOidcProvider, "false"]
+    Assertions:
+      - Assert: !Not [!Equals [!Ref ExistingOidcProviderArn, ""]]
+        AssertDescription: With CreateOidcProvider=false, ExistingOidcProviderArn is required.
+
+Conditions:
+  CreateProvider: !Equals [!Ref CreateOidcProvider, "true"]
+  TrustMain: !Equals [!Ref TrustSubject, main]
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: CreateProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+
+  # What the fernslop and fernslop-ecr stack updates run as. Only CloudFormation can assume it; the deploy role
+  # can only pass it to CloudFormation.
+  CloudFormationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - { Effect: Allow, Principal: { Service: cloudformation.amazonaws.com }, Action: "sts:AssumeRole" }
+      Policies:
+        - PolicyName: manage-fernslop-stacks
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # ecr-stack.yaml: the fernslop repository
+              - Effect: Allow
+                Action:
+                  - ecr:CreateRepository
+                  - ecr:DeleteRepository
+                  - ecr:DescribeRepositories
+                  - ecr:PutImageScanningConfiguration
+                  - ecr:PutImageTagMutability
+                  - ecr:PutLifecyclePolicy
+                  - ecr:GetLifecyclePolicy
+                  - ecr:DeleteLifecyclePolicy
+                  - ecr:SetRepositoryPolicy
+                  - ecr:GetRepositoryPolicy
+                  - ecr:DeleteRepositoryPolicy
+                  - ecr:ListImages
+                  - ecr:BatchDeleteImage
+                  - ecr:TagResource
+                  - ecr:UntagResource
+                  - ecr:ListTagsForResource
+                Resource: !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/fernslop"
+              # ec2-stack.yaml: LatestAmiId parameter (public AWS parameter)
+              - Effect: Allow
+                Action: [ssm:GetParameter, ssm:GetParameters]
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}::parameter/aws/service/ami-amazon-linux-latest/*"
+              # ec2-stack.yaml: SecurityGroup, Instance, ElasticIp, ElasticIpAssociation (EC2 names its
+              # resources by generated IDs, so these are scoped to this account's region, not by name)
+              - Effect: Allow
+                Action:
+                  - ec2:Describe*
+                  - ec2:CreateSecurityGroup
+                  - ec2:DeleteSecurityGroup
+                  - ec2:AuthorizeSecurityGroupIngress
+                  - ec2:AuthorizeSecurityGroupEgress
+                  - ec2:RevokeSecurityGroupIngress
+                  - ec2:RevokeSecurityGroupEgress
+                  - ec2:UpdateSecurityGroupRuleDescriptionsIngress
+                  - ec2:UpdateSecurityGroupRuleDescriptionsEgress
+                  - ec2:RunInstances
+                  - ec2:TerminateInstances
+                  - ec2:StartInstances
+                  - ec2:StopInstances
+                  - ec2:ModifyInstanceAttribute
+                  - ec2:ModifyInstanceMetadataOptions
+                  - ec2:MonitorInstances
+                  - ec2:UnmonitorInstances
+                  - ec2:AssociateIamInstanceProfile
+                  - ec2:DisassociateIamInstanceProfile
+                  - ec2:ReplaceIamInstanceProfileAssociation
+                  - ec2:AllocateAddress
+                  - ec2:ReleaseAddress
+                  - ec2:AssociateAddress
+                  - ec2:DisassociateAddress
+                  - ec2:CreateTags
+                  - ec2:DeleteTags
+                Resource: "*"
+                Condition: { StringEquals: { "aws:RequestedRegion": !Ref "AWS::Region" } }
+              # ec2-stack.yaml: InstanceRole and InstanceProfile. CloudFormation names them
+              # fernslop-<LogicalId>-<suffix>.
+              - Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:UpdateRole
+                  - iam:UpdateAssumeRolePolicy
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:ListRoleTags
+                  - iam:PutRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                  - iam:ListInstanceProfilesForRole
+                  - iam:CreateInstanceProfile
+                  - iam:DeleteInstanceProfile
+                  - iam:GetInstanceProfile
+                  - iam:AddRoleToInstanceProfile
+                  - iam:RemoveRoleFromInstanceProfile
+                  - iam:TagInstanceProfile
+                  - iam:UntagInstanceProfile
+                Resource:
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/fernslop-*"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:instance-profile/fernslop-*"
+              # Only the managed policy ec2-stack.yaml attaches
+              - Effect: Allow
+                Action: [iam:AttachRolePolicy, iam:DetachRolePolicy]
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/fernslop-*"
+                Condition:
+                  ArnEquals: { "iam:PolicyARN": "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore" }
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/fernslop-*"
+                Condition: { StringEquals: { "iam:PassedToService": ec2.amazonaws.com } }
+              # This stack's own roles (fernslop-github-*) also match fernslop-*: a template run as this role
+              # must never be able to change them, or the deploy role could widen its own rights.
+              - Effect: Deny
+                Action: "iam:*"
+                Resource:
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/fernslop-github-*"
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:instance-profile/fernslop-github-*"
+              # ec2-stack.yaml: BackupBucket and BackupBucketPolicy. Bucket configuration only: no object
+              # actions, so neither this role nor the deploy role can read or delete the dumps.
+              - Effect: Allow
+                Action:
+                  - s3:CreateBucket
+                  - s3:ListAllMyBuckets
+                  - s3:GetBucketLocation
+                  - s3:GetBucketTagging
+                  - s3:PutBucketTagging
+                  - s3:GetEncryptionConfiguration
+                  - s3:PutEncryptionConfiguration
+                  - s3:GetBucketPublicAccessBlock
+                  - s3:PutBucketPublicAccessBlock
+                  - s3:GetBucketOwnershipControls
+                  - s3:PutBucketOwnershipControls
+                  - s3:GetLifecycleConfiguration
+                  - s3:PutLifecycleConfiguration
+                  - s3:GetBucketPolicy
+                  - s3:PutBucketPolicy
+                  - s3:DeleteBucketPolicy
+                Resource: "arn:aws:s3:::fernslop-backupbucket-*"
+              # ec2-stack.yaml: LogGroup
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:DeleteLogGroup
+                  - logs:PutRetentionPolicy
+                  - logs:DeleteRetentionPolicy
+                  - logs:TagResource
+                  - logs:UntagResource
+                  - logs:ListTagsForResource
+                  - logs:TagLogGroup
+                  - logs:UntagLogGroup
+                  - logs:ListTagsLogGroup
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/fernslop/app*"
+              - Effect: Allow
+                Action: logs:DescribeLogGroups
+                Resource: "*"
+              # ec2-stack.yaml: RecoveryAlarm, BackupMissingAlarm (named fernslop-<LogicalId>-<suffix>), Dashboard
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricAlarm
+                  - cloudwatch:DeleteAlarms
+                  - cloudwatch:TagResource
+                  - cloudwatch:UntagResource
+                  - cloudwatch:ListTagsForResource
+                Resource: !Sub "arn:aws:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:fernslop-*"
+              - Effect: Allow
+                Action: cloudwatch:DescribeAlarms
+                Resource: "*"
+              - Effect: Allow
+                Action: [cloudwatch:PutDashboard, cloudwatch:GetDashboard, cloudwatch:DeleteDashboards]
+                Resource: !Sub "arn:aws:cloudwatch::${AWS::AccountId}:dashboard/fernslop"
+
+  # Assumed by GitHub Actions. No IAM write, no S3: it starts change sets that run as CloudFormationRole,
+  # pushes the image and tells the instance to pull it.
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If [CreateProvider, !Ref GitHubOidcProvider, !Ref ExistingOidcProviderArn]
+            Action: "sts:AssumeRoleWithWebIdentity"
+            Condition:
+              StringEquals:
+                "token.actions.githubusercontent.com:aud": sts.amazonaws.com
+                "token.actions.githubusercontent.com:sub": !If
+                  - TrustMain
+                  - !Sub "repo:${GitHubRepo}:ref:refs/heads/main"
+                  - !Sub "repo:${GitHubRepo}:environment:production"
+      Policies:
+        - PolicyName: deploy-fernslop
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # aws cloudformation deploy on the two app stacks
+              - Effect: Allow
+                Action:
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:ExecuteChangeSet
+                Resource:
+                  - !Sub "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/fernslop/*"
+                  - !Sub "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/fernslop-ecr/*"
+                  # The change sets `aws cloudformation deploy` names (in case IAM checks the change set ARN)
+                  - !Sub "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:changeSet/awscli-cloudformation-package-deploy-*/*"
+              # Template parameters CloudFormation resolves and checks with the caller's rights: LatestAmiId
+              # (a public AWS parameter) and the VpcId/SubnetId types (read-only)
+              - Effect: Allow
+                Action: [ssm:GetParameters]
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}::parameter/aws/service/ami-amazon-linux-latest/*"
+              - Effect: Allow
+                Action: [ec2:DescribeVpcs, ec2:DescribeSubnets]
+                Resource: "*"
+              # Change sets must run as CloudFormationRole, never with this role's own rights
+              - Effect: Allow
+                Action: cloudformation:CreateChangeSet
+                Resource:
+                  - !Sub "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/fernslop/*"
+                  - !Sub "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/fernslop-ecr/*"
+                Condition: { ArnEquals: { "cloudformation:RoleArn": !GetAtt CloudFormationRole.Arn } }
+              # Takes a template body, not a stack, so it cannot be scoped (read-only)
+              - Effect: Allow
+                Action: cloudformation:GetTemplateSummary
+                Resource: "*"
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt CloudFormationRole.Arn
+                Condition: { StringEquals: { "iam:PassedToService": cloudformation.amazonaws.com } }
+              # Push the image
+              - { Effect: Allow, Action: "ecr:GetAuthorizationToken", Resource: "*" }
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:PutImage
+                Resource: !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/fernslop"
+              # Tell the instance to pull and restart: AWS-RunShellScript only, and only on instances tagged
+              # Name=fernslop (ec2-stack.yaml tags the instance so; its ID changes when it is replaced).
+              # The document and the instance are separate resources of the one call, so separate statements.
+              - Effect: Allow
+                Action: ssm:SendCommand
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}::document/AWS-RunShellScript"
+              - Effect: Allow
+                Action: ssm:SendCommand
+                Resource: !Sub "arn:aws:ec2:${AWS::Region}:${AWS::AccountId}:instance/*"
+                Condition: { StringEquals: { "ssm:resourceTag/Name": fernslop } }
+              # aws ssm wait command-executed (these actions take no resource ARN)
+              - Effect: Allow
+                Action: [ssm:GetCommandInvocation, ssm:ListCommandInvocations]
+                Resource: "*"
+
+Outputs:
+  DeployRoleArn:
+    Description: GitHub variable AWS_DEPLOY_ROLE_ARN
+    Value: !GetAtt DeployRole.Arn
+  CloudFormationRoleArn:
+    Description: GitHub variable AWS_CFN_ROLE_ARN (deploy.sh reads it as CFN_ROLE_ARN)
+    Value: !GetAtt CloudFormationRole.Arn
