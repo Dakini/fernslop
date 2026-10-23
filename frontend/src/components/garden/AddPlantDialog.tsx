@@ -5,6 +5,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { getServices, type IdentifyCandidate, type Plant } from "@/services";
+import { RateLimitError } from "@/services/http/httpService";
 import { PlantAvatar } from "./PlantAvatar";
 
 const LOW_CONFIDENCE = 0.3;
@@ -38,7 +39,7 @@ export function AddPlantDialog({ open, onOpenChange, onPick }: { open: boolean; 
         setTab("search");
       } else setCandidates(c);
     } catch (e) {
-      setNotice((e as Error).message);
+      if (!(e instanceof RateLimitError)) setNotice((e as Error).message);
     } finally {
       setBusy(false);
     }

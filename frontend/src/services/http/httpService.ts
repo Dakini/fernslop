@@ -14,17 +14,23 @@ const NETWORK_ERROR =
 /** One toast at a time for 429s: a burst of limited calls updates it instead of stacking. */
 const RATE_LIMIT_TOAST_ID = "rate-limit";
 
+/**
+ * A 429. `httpService` has already shown the one `rate-limit` toast for it, so
+ * callers must not show its message again (no second toast, no inline copy).
+ */
+export class RateLimitError extends Error {
+  override name = "RateLimitError";
+}
+
 /** The 429 message, from the `Retry-After` header (whole seconds). */
 export function tooFastMessage(retryAfter: string | null): string {
   const seconds = Number(retryAfter);
   let wait = "a moment";
   if (retryAfter && Number.isFinite(seconds) && seconds > 0) {
     const s = Math.ceil(seconds);
-    const m = Math.ceil(s / 60);
-    wait =
-      s < 60
-        ? `${s} second${s === 1 ? "" : "s"}`
-        : `${m} minute${m === 1 ? "" : "s"}`;
+    const [n, unit] =
+      s < 60 ? [s, "second"] : s < 3600 ? [Math.ceil(s / 60), "minute"] : [Math.ceil(s / 3600), "hour"];
+    wait = `${n} ${unit}${n === 1 ? "" : "s"}`;
   }
   return `You're going a bit fast. Try again in ${wait}.`;
 }
@@ -66,7 +72,7 @@ export function createHttpService(
     if (res.status === 429) {
       const message = tooFastMessage(res.headers.get("Retry-After"));
       toast.error(message, { id: RATE_LIMIT_TOAST_ID });
-      return new Error(message);
+      return new RateLimitError(message);
     }
     try {
       const body = await res.json();

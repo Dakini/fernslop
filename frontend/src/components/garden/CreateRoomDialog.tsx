@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { getServices } from "@/services";
+import { RateLimitError } from "@/services/http/httpService";
 
 export function shareUrl(roomId: string) {
   return `${window.location.origin}/r/${roomId}`;
@@ -66,7 +67,7 @@ export function CreateRoomDialog({ children }: { children: ReactNode }) {
       await nav({ to: "/r/$roomId", params: { roomId: room.id } });
       toast("Share this garden", { action: { label: "Copy link", onClick: () => copyShare(room.id) }, duration: 10000 });
     } catch (err) {
-      setError((err as Error).message);
+      if (!(err instanceof RateLimitError)) setError((err as Error).message);
     } finally {
       setBusy(false);
     }
