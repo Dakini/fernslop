@@ -194,6 +194,13 @@ export function createHttpService(
         `/rooms/${encodeURIComponent(roomId)}/follows`,
         body("POST", { email }),
       ),
+    async confirmFollow(token) {
+      const r = await json<{ confirmed: boolean }>(
+        "/follows/confirm",
+        body("POST", { token }),
+      );
+      return r.confirmed;
+    },
     async unfollow(token) {
       const r = await json<{ unsubscribed: boolean }>(
         "/follows/unsubscribe",

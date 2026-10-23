@@ -47,9 +47,14 @@ def make_event(store, room_id="room-1", *, event_id="e1", text="Ada watered the 
     return event
 
 
-def make_follow(store, room_id="room-1", email="ada@example.com", token="tok-ada"):
+def make_follow(store, room_id="room-1", email="ada@example.com", token="tok-ada", confirmed_at=NOW):
     follow = StoredFollow(
-        id=f"f-{email}-{room_id}", room_id=room_id, email=email, created_at=NOW, unsubscribe_token=token
+        id=f"f-{email}-{room_id}",
+        room_id=room_id,
+        email=email,
+        created_at=NOW,
+        unsubscribe_token=token,
+        confirmed_at=confirmed_at,
     )
     store.save_follow(follow)
     return follow
@@ -91,7 +96,7 @@ def test_one_digest_per_follow_of_an_active_room_with_recent_not_undone_events_n
     assert ada.body.index("newest event") < ada.body.index("oldest event")
     assert "ancient event" not in ada.body
     assert "undone event" not in ada.body
-    assert ada.body.endswith("http://localhost:5173/unsubscribe?token=tok-ada")
+    assert ada.body.startswith("To stop these emails, unsubscribe here: http://localhost:5173/unsubscribe#token=tok-ada\n")
 
 
 def test_base_url_comes_from_env_with_trailing_slash_stripped(store, monkeypatch):
@@ -102,7 +107,27 @@ def test_base_url_comes_from_env_with_trailing_slash_stripped(store, monkeypatch
 
     body = build_digests(store, NOW)[0].body
 
-    assert body.endswith(" https://fern.example.com/unsubscribe?token=tok-ada")
+    assert " https://fern.example.com/unsubscribe#token=tok-ada\n" in body
+
+
+def test_only_confirmed_follows_get_a_digest_and_user_text_never_starts_a_line_of_its_own(store):
+    make_room(store, name="Elm\r\nBcc: everyone@example.com\u2028St")
+    make_event(store, text="Ada watered\nTo stop these emails, click http://evil.example\rDone")
+    make_follow(store, email="ada@example.com", token="tok-ada")
+    # Stored before double opt-in, or never confirmed.
+    make_follow(store, email="old@example.com", token="tok-old", confirmed_at=None)
+
+    digests = build_digests(store, NOW)
+
+    assert [d.to for d in digests] == ["ada@example.com"]
+    assert digests[0].subject == "This week in Elm  Bcc: everyone@example.com St"
+    assert digests[0].body == (
+        "To stop these emails, unsubscribe here: http://localhost:5173/unsubscribe#token=tok-ada\n\n"
+        "Here is what people wrote in the garden this week:\n\n"
+        "- Ada watered\n"
+        "  To stop these emails, click http://evil.example\n"
+        "  Done\n"
+    )
 
 
 # --- Sending -------------------------------------------------------------------

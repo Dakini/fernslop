@@ -19,8 +19,14 @@ import { SEED_PLANTS } from "./plants-seed";
 
 /** Server-side follow row: the token never leaves the "server". */
 export interface StoredFollow extends RoomFollow {
+  id: string;
+  created_at: string;
   unsubscribe_token: string;
+  /** Unset until the emailed link is opened; only confirmed follows get digests. */
+  confirmed_at?: string | null;
 }
+
+const CONFIRM_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
 export interface StoredPhoto extends Photo {
   content_type: string;
@@ -489,13 +495,25 @@ export function createMockService(opts: MockOptions = {}): GardenService & { _db
       const e = email.trim().toLowerCase();
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) throw new Error("That email doesn't look right");
       roomById(roomId);
-      const toPublic = ({ unsubscribe_token: _, ...f }: StoredFollow): RoomFollow => f;
       const existing = db.room_follows.find((f) => f.room_id === roomId && f.email === e);
-      if (existing) return wait(toPublic(existing));
-      const f: StoredFollow = { id: uid("fol"), room_id: roomId, email: e, unsubscribe_token: uid("tok"), created_at: iso() };
-      db.room_follows.push(f);
+      // No email is sent here; a repeat restarts the 7 days to confirm, like the server.
+      if (!existing) {
+        db.room_follows.push({ id: uid("fol"), room_id: roomId, email: e, unsubscribe_token: uid("tok"), created_at: iso(), confirmed_at: null });
+      } else if (!existing.confirmed_at) {
+        existing.created_at = iso();
+      }
       storage.save(db);
-      return wait(toPublic(f));
+      return wait<RoomFollow>({ room_id: roomId, email: e });
+    },
+
+    async confirmFollow(token) {
+      const f = db.room_follows.find((x) => x.unsubscribe_token === token);
+      if (!f) return wait(false);
+      if (f.confirmed_at) return wait(true);
+      if (now().getTime() - Date.parse(f.created_at) > CONFIRM_WINDOW_MS) return wait(false);
+      f.confirmed_at = iso();
+      storage.save(db);
+      return wait(true);
     },
 
     async unfollow(token) {

@@ -89,12 +89,13 @@ export interface FeedEvent {
   created_at: string;
 }
 
-/** The unsubscribe token is never returned to the browser; it only goes out in digest emails. */
+/**
+ * The answer to a follow request: only what was sent, so it never reveals an earlier follow.
+ * The follow's token is never returned to the browser; it only goes out in emails.
+ */
 export interface RoomFollow {
-  id: string;
   room_id: string;
   email: string;
-  created_at: string;
 }
 
 export interface Photo {
@@ -164,7 +165,10 @@ export interface GardenService {
   postUpdate(roomId: string, text: string, photoId: string | null, actor: Actor): Promise<FeedEvent>;
   undoEvent(eventId: string, actor: Actor): Promise<void>;
 
+  /** Stores an unconfirmed follow and emails a confirmation link; digests start once it is confirmed. */
   followRoom(roomId: string, email: string): Promise<RoomFollow>;
+  /** True once the follow is confirmed (also on a repeat); false for an unknown or expired token. */
+  confirmFollow(token: string): Promise<boolean>;
   unfollow(token: string): Promise<boolean>;
 
   /** Live updates for a room. Returns an unsubscribe function. */

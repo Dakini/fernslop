@@ -4,11 +4,18 @@
 activity a summary of it, with their personal unsubscribe link.
 ``build_digests`` is pure: it reads the store and returns what to send, and
 never sends or reads the clock. Sending goes through ``EmailSender``.
+
+Only confirmed follows get digests. Everything users wrote (the room name, feed lines) is
+untrusted: the subject is kept to one line, and the body puts the unsubscribe link first and
+makes every feed line a bullet with any further lines indented, so no user text can pass for
+one of the email's own lines. Links carry the token in the URL fragment, which browsers never
+send, so it stays out of server and proxy access logs.
 """
 
 import logging
 import os
 import sys
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Protocol
@@ -59,21 +66,58 @@ class SendReport:
     failed: int
 
 
+def get_email_sender() -> EmailSender:
+    """FastAPI dependency: the sender for emails sent during a request. Nothing real is sent yet
+    (``backlog/parked/110-api-email-sender.md``)."""
+    return ConsoleSender()
+
+
 def public_url() -> str:
     """The base URL of the web app, from ``FERNSLOP_PUBLIC_URL``, without a trailing slash."""
     return (os.environ.get("FERNSLOP_PUBLIC_URL") or DEFAULT_PUBLIC_URL).rstrip("/")
 
 
+def unsubscribe_link(token: str) -> str:
+    return f"{public_url()}/unsubscribe#token={token}"
+
+
+def confirm_link(token: str) -> str:
+    return f"{public_url()}/confirm-follow#token={token}"
+
+
+def one_line(text: str) -> str:
+    """``text`` with every control, format or separator character (other than a plain space)
+    replaced by a space, so it fits on one header line."""
+    return "".join(" " if char != " " and unicodedata.category(char)[0] in "CZ" else char for char in text)
+
+
+def _bullet(text: str) -> str:
+    """One feed line as a ``- `` bullet, with any further lines indented under it."""
+    first, *rest = text.splitlines() or [""]
+    return "\n".join([f"- {first}", *(f"  {line}" for line in rest)])
+
+
+def confirmation_email(room_name: str, token: str) -> tuple[str, str]:
+    """Subject and body of the email that confirms a new follow. The room name is only in the
+    subject, on one line."""
+    subject = one_line(f"Confirm weekly updates from {room_name}")
+    body = (
+        "Someone asked for weekly updates from a Fernslop garden to be sent to this address.\n\n"
+        f"To confirm, open this link within 7 days: {confirm_link(token)}\n\n"
+        "If it wasn't you, ignore this email and you won't hear from us again.\n"
+    )
+    return subject, body
+
+
 def build_digests(store: StoreProtocol, now: datetime) -> list[Digest]:
-    """One digest per follow of each room with a not-undone feed event in the 7 days up to ``now``.
+    """One digest per confirmed follow of each room with a not-undone feed event in the 7 days up to ``now``.
 
     Soft-deleted rooms get none: ``list_rooms`` leaves them out.
     """
     since = now - DIGEST_WINDOW
-    base = public_url()
     digests: list[Digest] = []
     for room in store.list_rooms():
-        follows = store.list_follows(room.id)
+        follows = [follow for follow in store.list_follows(room.id) if follow.confirmed_at is not None]
         if not follows:
             continue
         # list_feed_events is newest first.
@@ -84,18 +128,18 @@ def build_digests(store: StoreProtocol, now: datetime) -> list[Digest]:
         ]
         if not events:
             continue
-        lines = "\n".join(f"- {event.text}" for event in events)
+        lines = "\n".join(_bullet(event.text) for event in events)
+        subject = one_line(f"This week in {room.name}")
         for follow in follows:
             body = (
-                f"Here is what happened in {room.name} this week:\n\n"
-                f"{lines}\n\n"
-                f"To stop these emails, unsubscribe here: "
-                f"{base}/unsubscribe?token={follow.unsubscribe_token}"
+                f"To stop these emails, unsubscribe here: {unsubscribe_link(follow.unsubscribe_token)}\n\n"
+                "Here is what people wrote in the garden this week:\n\n"
+                f"{lines}\n"
             )
             digests.append(
                 Digest(
                     to=follow.email,
-                    subject=f"This week in {room.name}",
+                    subject=subject,
                     body=body,
                     room_id=room.id,
                 )

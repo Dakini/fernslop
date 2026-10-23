@@ -10,12 +10,18 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as ConfirmFollowRouteImport } from './routes/confirm-follow'
 import { Route as UnsubscribeRouteImport } from './routes/unsubscribe'
 import { Route as RRoomIdRouteImport } from './routes/r.$roomId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ConfirmFollowRoute = ConfirmFollowRouteImport.update({
+  id: '/confirm-follow',
+  path: '/confirm-follow',
   getParentRoute: () => rootRouteImport,
 } as any)
 const UnsubscribeRoute = UnsubscribeRouteImport.update({
@@ -31,30 +37,34 @@ const RRoomIdRoute = RRoomIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/confirm-follow': typeof ConfirmFollowRoute
   '/unsubscribe': typeof UnsubscribeRoute
   '/r/$roomId': typeof RRoomIdRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/confirm-follow': typeof ConfirmFollowRoute
   '/unsubscribe': typeof UnsubscribeRoute
   '/r/$roomId': typeof RRoomIdRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/confirm-follow': typeof ConfirmFollowRoute
   '/unsubscribe': typeof UnsubscribeRoute
   '/r/$roomId': typeof RRoomIdRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/unsubscribe' | '/r/$roomId'
+  fullPaths: '/' | '/confirm-follow' | '/unsubscribe' | '/r/$roomId'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/unsubscribe' | '/r/$roomId'
-  id: '__root__' | '/' | '/unsubscribe' | '/r/$roomId'
+  to: '/' | '/confirm-follow' | '/unsubscribe' | '/r/$roomId'
+  id: '__root__' | '/' | '/confirm-follow' | '/unsubscribe' | '/r/$roomId'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  ConfirmFollowRoute: typeof ConfirmFollowRoute
   UnsubscribeRoute: typeof UnsubscribeRoute
   RRoomIdRoute: typeof RRoomIdRoute
 }
@@ -66,6 +76,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/confirm-follow': {
+      id: '/confirm-follow'
+      path: '/confirm-follow'
+      fullPath: '/confirm-follow'
+      preLoaderRoute: typeof ConfirmFollowRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/unsubscribe': {
@@ -87,6 +104,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  ConfirmFollowRoute: ConfirmFollowRoute,
   UnsubscribeRoute: UnsubscribeRoute,
   RRoomIdRoute: RRoomIdRoute,
 }

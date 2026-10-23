@@ -3,15 +3,10 @@ import { useEffect, useRef, useState } from "react";
 import { Sprout } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { getServices } from "@/services";
+import { currentToken } from "./-token";
 
 export const Route = createFileRoute("/unsubscribe")({
   ssr: false,
-  validateSearch: (search: Record<string, unknown>): { token?: string } => ({
-    token:
-      typeof search.token === "string" && search.token
-        ? search.token
-        : undefined,
-  }),
   head: () => ({
     meta: [
       { title: "Unsubscribe · Fernslop" },
@@ -45,8 +40,8 @@ const COPY: Record<
   },
 };
 
-/** The token is read from the URL and sent in the request body only. */
-export function UnsubscribeResult({ token }: { token?: string }) {
+/** The token is read from the URL (fragment, or the older query) and sent in the request body only. */
+export function UnsubscribeResult({ token }: { token?: string | undefined }) {
   const [result, setResult] = useState<Result>(token ? "pending" : "missing");
   // Guards against React strict mode re-running the effect and posting twice.
   const request = useRef<Promise<boolean> | null>(null);
@@ -88,6 +83,6 @@ export function UnsubscribeResult({ token }: { token?: string }) {
 }
 
 function UnsubscribePage() {
-  const { token } = Route.useSearch();
+  const [token] = useState(currentToken);
   return <UnsubscribeResult token={token} />;
 }

@@ -1,6 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { UnsubscribeResult } from "@/routes/unsubscribe";
+import { tokenFromUrl } from "@/routes/-token";
 import { setServices, type GardenService } from "@/services";
 
 const useService = (unfollow: GardenService["unfollow"]) =>
@@ -42,5 +43,11 @@ describe("unsubscribe page", () => {
     expect(
       await screen.findByText("We couldn't reach the garden"),
     ).toBeInTheDocument();
+  });
+
+  it("reads the token from the link's fragment and still accepts the older ?token=", () => {
+    expect(tokenFromUrl("#token=tok-frag", "")).toBe("tok-frag");
+    expect(tokenFromUrl("", "?token=tok-query")).toBe("tok-query");
+    expect(tokenFromUrl("", "")).toBeUndefined();
   });
 });

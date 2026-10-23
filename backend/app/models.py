@@ -212,14 +212,16 @@ class RoomState(ApiModel):
 
 
 class RoomFollow(ApiModel):
-    """The public view of a follow. The unsubscribe token is deliberately left out."""
+    """What the API answers to a follow request.
+
+    Only what the caller sent: no id, timestamps or confirmation state, so the answer is the
+    same whether or not the address already followed the room, and the token is never in it.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
-    id: str
     room_id: str
     email: str
-    created_at: Timestamp
 
 
 # --- Stored-only types -------------------------------------------------------
@@ -235,14 +237,24 @@ class StoredRoom(Room):
     deleted_at: Timestamp | None = None
 
 
-class StoredFollow(RoomFollow):
-    """A follow as kept by the store, with its secret unsubscribe token."""
+class StoredFollow(ApiModel):
+    """A follow as kept by the store, with its secret token.
 
+    The token is in both the confirmation and the unsubscribe link. Digests go only to follows
+    with a ``confirmed_at``; follows stored before double opt-in have none, so they get nothing
+    until their owner follows again and confirms.
+    """
+
+    id: str
+    room_id: str
+    email: str
+    created_at: Timestamp
     unsubscribe_token: str
+    confirmed_at: Timestamp | None = None
 
     def to_public(self) -> RoomFollow:
-        """The follow as the API shows it, without the token."""
-        return RoomFollow(id=self.id, room_id=self.room_id, email=self.email, created_at=self.created_at)
+        """The follow as the API shows it, without the id, times or token."""
+        return RoomFollow(room_id=self.room_id, email=self.email)
 
 
 class StoredPhoto(ApiModel):

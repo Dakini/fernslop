@@ -1,14 +1,14 @@
-import uuid
+from datetime import timedelta
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app import timestamps
+from app.digest import InMemorySender, get_email_sender
 from app.main import app
 from app.sql_store import SqlStore
 from app.store import get_store
 
-PUBLIC_KEYS = {"id", "room_id", "email", "created_at"}
 BAD_EMAIL = "That email doesn't look right"
 
 
@@ -22,7 +22,16 @@ def store():
 
 
 @pytest.fixture
-def follows_client(store):
+def sender():
+    """Records the emails a request sends, in place of the console sender."""
+    recorder = InMemorySender()
+    app.dependency_overrides[get_email_sender] = lambda: recorder
+    yield recorder
+    app.dependency_overrides.pop(get_email_sender, None)
+
+
+@pytest.fixture
+def follows_client(store, sender):
     return TestClient(app)
 
 
@@ -38,51 +47,50 @@ def unsubscribe(client, token):
     return client.post("/api/follows/unsubscribe", json={"token": token})
 
 
-# --- Follow: first follow -----------------------------------------------------
+def confirm(client, token):
+    return client.post("/api/follows/confirm", json={"token": token})
 
 
-def test_first_follow_returns_201_with_normalised_email_and_no_actor_headers(follows_client, store):
+# --- Follow: double opt-in ----------------------------------------------------
+
+
+def test_follow_answers_201_with_only_room_and_email_and_emails_a_confirm_link_until_confirmed(
+    follows_client, store, sender
+):
     room = first_room(store)
 
-    response = follow(follows_client, room.id, "  Ada@Example.COM ")
-
-    body = response.json()
-    assert response.status_code == 201
-    assert uuid.UUID(body["id"]).version == 4
-    assert body["room_id"] == room.id
-    assert body["email"] == "ada@example.com"
-    assert body["created_at"] == timestamps.format_timestamp(store.get_follow_by_email(room.id, "ada@example.com").created_at)
-
-
-# --- Follow: token never leaks ------------------------------------------------
-
-
-def test_follow_responses_never_contain_the_unsubscribe_token(follows_client, store):
-    room = first_room(store)
-
-    created = follow(follows_client, room.id)
+    created = follow(follows_client, room.id, "  Ada@Example.COM ")
     repeated = follow(follows_client, room.id, "ADA@example.com")
+    stored = store.get_follow_by_email(room.id, "ada@example.com")
+    confirmed = confirm(follows_client, stored.unsubscribe_token)
+    after_confirm = follow(follows_client, room.id, "ada@example.com")
 
-    token = store.get_follow_by_email(room.id, "ada@example.com").unsubscribe_token
-    assert created.status_code == 201
-    assert repeated.status_code == 200
-    for response in (created, repeated):
-        assert set(response.json()) == PUBLIC_KEYS
-        assert token not in response.text
-
-
-# --- Follow: repeat and other rooms ------------------------------------------
-
-
-def test_following_again_with_same_email_in_any_case_returns_200_with_same_follow(follows_client, store):
-    room = first_room(store)
-    created = follow(follows_client, room.id, "ada@example.com").json()
-
-    response = follow(follows_client, room.id, " ADA@Example.com")
-
-    assert response.status_code == 200
-    assert response.json() == created
+    # The same answer every time, so it never reveals an earlier follow, and never the token.
+    for response in (created, repeated, after_confirm):
+        assert response.status_code == 201
+        assert response.json() == {"room_id": room.id, "email": "ada@example.com"}
     assert len(store.list_follows(room.id)) == 1
+    # One email per unconfirmed request, none once confirmed; the token is only in the fragment.
+    link = f"http://localhost:5173/confirm-follow#token={stored.unsubscribe_token}"
+    assert [(to, link in body) for to, _, body in sender.sent] == [("ada@example.com", True)] * 2
+    assert confirmed.json() == {"confirmed": True}
+    assert confirm(follows_client, stored.unsubscribe_token).json() == {"confirmed": True}
+    assert store.get_follow_by_email(room.id, "ada@example.com").confirmed_at is not None
+
+
+def test_confirm_with_an_unknown_token_or_after_7_days_returns_false_and_changes_nothing(follows_client, store):
+    room = first_room(store)
+    follow(follows_client, room.id)
+    stale = store.get_follow_by_email(room.id, "ada@example.com")
+    stale = stale.model_copy(update={"created_at": timestamps.now() - timedelta(days=7, minutes=1)})
+    store.save_follow(stale)
+
+    unknown = confirm(follows_client, "no-such-token")
+    expired = confirm(follows_client, stale.unsubscribe_token)
+
+    assert unknown.json() == {"confirmed": False}
+    assert expired.json() == {"confirmed": False}
+    assert store.get_follow_by_email(room.id, "ada@example.com").confirmed_at is None
 
 
 # --- Follow: validation -------------------------------------------------------

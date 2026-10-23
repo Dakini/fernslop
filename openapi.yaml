@@ -28,7 +28,11 @@ info:
     for a Latin "A") are not filtered. The server only rejects control and format
     characters (and line and paragraph separators) in names, labels and post text.
 
-    Unsubscribing uses the follow's `unsubscribe_token` as a bearer capability.
+    Each follow has one secret token, a bearer capability for both confirming the follow
+    and unsubscribing. It only ever goes out in emails, in the URL fragment of
+    `<FERNSLOP_PUBLIC_URL>/confirm-follow#token=…` and `<FERNSLOP_PUBLIC_URL>/unsubscribe#token=…`
+    (browsers never send the fragment, so it stays out of access logs); the pages send it
+    in a JSON body. The unsubscribe page still accepts the older `?token=` link.
 
     ## Errors
     Every error response has an `Error` body. The frontend shows `message` directly
@@ -728,15 +732,21 @@ paths:
       tags: [Follows]
       operationId: followRoom
       x-service-method: followRoom
-      summary: Follow a room by email
+      summary: Follow a room by email (double opt-in)
       description: |
-        No actor is needed. The server trims and lowercases the email. Following again with
-        the same email returns the existing follow. A weekly digest is sent only if the room
-        had activity that week; that is a scheduled job, not an endpoint.
+        No actor is needed. The server trims and lowercases the email and stores an
+        unconfirmed follow, then (after the commit) emails a link to
+        `<FERNSLOP_PUBLIC_URL>/confirm-follow#token=…`. Only confirmed follows get the
+        weekly digest, which is a scheduled job, not an endpoint. Follows stored before
+        double opt-in count as unconfirmed.
 
-        The response **must not** include the unsubscribe token. The server keeps it and
-        sends it only inside digest emails. Otherwise anyone could unsubscribe any
-        address they know.
+        The answer is always `201` with only `room_id` and `email`, so it never reveals
+        whether the address already follows the room. Following again while unconfirmed
+        re-sends the email and restarts the 7 days to confirm; once confirmed it sends
+        nothing. A failed send is logged and still answers `201`.
+
+        The response **must not** include the token. Otherwise anyone could confirm or
+        unsubscribe any address they know.
       parameters:
         - $ref: "#/components/parameters/RoomId"
       requestBody:
@@ -750,12 +760,7 @@ paths:
                 email: { type: string, format: email }
       responses:
         "201":
-          description: New follow created
-          content:
-            application/json:
-              schema: { $ref: "#/components/schemas/RoomFollow" }
-        "200":
-          description: This email already follows the room
+          description: Follow requested (new, repeated or already confirmed alike)
           content:
             application/json:
               schema: { $ref: "#/components/schemas/RoomFollow" }
@@ -773,6 +778,48 @@ paths:
         "429":
           $ref: "#/components/responses/TooManyRequests"
 
+  /follows/confirm:
+    post:
+      tags: [Follows]
+      operationId: confirmFollow
+      x-service-method: confirmFollow
+      summary: Confirm a follow using the token from the confirmation email
+      description: |
+        Idempotent. Returns `confirmed: true` and starts digests, also when the follow was
+        confirmed already. Returns `confirmed: false` and changes nothing if the token
+        matched nothing or the follow was left unconfirmed for more than 7 days (follow
+        again to get a new link). Called once by the `/confirm-follow` page, which reads
+        the token from the URL fragment.
+      security: [{ unsubscribeToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string }
+      responses:
+        "200":
+          description: Result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [confirmed]
+                properties:
+                  confirmed: { type: boolean }
+        "400":
+          description: "`token` is not a string. Message is `token must be a string`."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "413":
+          $ref: "#/components/responses/JsonBodyTooLarge"
+        "415":
+          $ref: "#/components/responses/NotJson"
+
   /follows/unsubscribe:
     post:
       tags: [Follows]
@@ -781,8 +828,8 @@ paths:
       summary: Unsubscribe using the token from a digest email
       description: |
         Idempotent. Returns `unsubscribed: false` if the token matched nothing. The token is
-        only ever sent in digest emails. No UI route calls this yet; the one-click link in
-        those emails will.
+        only ever sent in emails; the `/unsubscribe` page reads it from the link's fragment
+        (`#token=…`, or the older `?token=…`) and calls this once.
       security: [{ unsubscribeToken: [] }]
       requestBody:
         required: true
@@ -1136,14 +1183,14 @@ components:
 
     RoomFollow:
       type: object
-      description: The public view of a follow. The unsubscribe token is deliberately left out.
-      required: [id, room_id, email, created_at]
+      description: |
+        The answer to a follow request: only what was sent. No id, timestamps or
+        confirmation state, which would reveal an earlier follow, and never the token.
+      required: [room_id, email]
       additionalProperties: false
       properties:
-        id: { type: string }
         room_id: { type: string, format: uuid }
         email: { type: string, format: email }
-        created_at: { $ref: "#/components/schemas/Timestamp" }
 
     Photo:
       type: object
