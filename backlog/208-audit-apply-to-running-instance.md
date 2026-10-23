@@ -20,6 +20,6 @@
 
 ## Constraints
 
-- `infra/deploy.sh`, `infra/ec2-stack.yaml`, new `infra/instance/`, `infra/README.md`. After #203 and #204 (they change the same files). No app code.
+- `infra/deploy.sh`, `infra/ec2-stack.yaml`, new `infra/instance/`, `infra/README.md`. After #204 (it changes the same files; #203 is done). No app code.
 
 **Open questions (user):** (1) There is no live deployment whose data matters (2026-10-22), so replacing the instance works today: park this until there is, or do it now? (2) If now, may the engineer and QA create and delete a throwaway AWS stack to verify it (small cost)?
