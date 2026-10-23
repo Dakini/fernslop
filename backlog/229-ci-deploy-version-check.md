@@ -39,3 +39,24 @@ An image built with a tag (format `YYYYMMDD-HHMMSS-shortsha`, from #235) reports
 - The route keeps `include_in_schema=False`; the field is documented in its docstring. No deploy file sets the variable (infra/ not touched).
 
 Tests: `cd backend && uv run pytest` 184 passed, 2 skipped; `uvx ruff check .` clean.
+
+**QA:**
+
+## QA: PASS
+
+- [x] Build with `--build-arg FERNSLOP_IMAGE_TAG=20261023-120000-abc1234`, run, `curl /api/health` returns `200 {"status": "ok", "version": "20261023-120000-abc1234"}` - PASS
+      Built and ran the image with SQLite; got exactly that body and a 200.
+- [x] Built without the arg (or empty) returns exactly `{"status": "ok"}` - PASS
+      Built with no arg and with `--build-arg FERNSLOP_IMAGE_TAG=`; both returned `200 {"status":"ok"}`.
+- [x] `version` holds only the tag string - PASS
+      `health.py` adds only the stripped env var value; no SHA, time, hostname or env name.
+- [x] The 503 "database is not answering" response is unchanged - PASS
+      503 branch untouched in `health.py`; `test_health_returns_503_when_the_database_is_unreachable` passes.
+- [x] Changing only the tag reuses the cached dependency and frontend layers - PASS
+      Rebuilt with a different tag: every RUN and COPY step (npm ci, frontend build, uv sync, useradd) showed CACHED. The `ARG` sits after all of them.
+- [x] Backend tests cover tag set and tag unset (at most 2, in `backend/app/test_main.py`) - PASS
+      `test_health_returns_ok` (tag unset) and `test_health_with_an_image_tag_returns_it_as_version`; no more than 2 added or changed.
+
+Scope: `FERNSLOP_IMAGE_TAG` appears only in `Dockerfile`, `health.py` and `test_main.py`; no deploy file sets it; the route keeps `include_in_schema=False`.
+
+Tests: `cd backend && uv run pytest`, 184 passed, 2 skipped, 0 failed
