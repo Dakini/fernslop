@@ -120,11 +120,23 @@ export interface RoomPage {
   next: string | null;
 }
 
+/** Room state carries at most this many feed events; `getRoomFeed` pages back from there. */
+export const FEED_PAGE_SIZE = 50;
+
 export interface RoomState {
   room: Room;
   plants: RoomPlant[];
   areas: RoomArea[];
+  /** The newest `FEED_PAGE_SIZE` events at most, newest first. */
   feed: FeedEvent[];
+  /** Cursor for older events (`getRoomFeed`'s `before`), null when there are none. */
+  feed_next: string | null;
+}
+
+/** One page of older feed events, newest first; `next` is the cursor for the page after, null on the last. */
+export interface FeedPage {
+  events: FeedEvent[];
+  next: string | null;
 }
 
 export interface IdentifyCandidate {
@@ -145,6 +157,11 @@ export interface GardenService {
    * when an older server answers 404; callers treat both as "the garden is gone". Other errors reject.
    */
   deleteRoom(roomId: string): Promise<boolean>;
+  /**
+   * Older feed events, newest first, continuing exactly after `before` (the state's `feed_next`
+   * or a page's `next`). `limit` defaults to 50, at most 100.
+   */
+  getRoomFeed(roomId: string, page?: { before?: string | null; limit?: number }): Promise<FeedPage>;
 
   listPlants(): Promise<Plant[]>;
   /** At most 12 matches, in reference order. */

@@ -16,7 +16,7 @@ import { PlantAvatar } from "@/components/garden/PlantAvatar";
 import { CareRing, CARE_ICONS } from "@/components/garden/CareRing";
 import { copyShare } from "@/components/garden/CreateRoomDialog";
 import { DeleteGardenDialog } from "@/components/garden/DeleteGardenDialog";
-import { plantsQuery, roomQuery, useRoomLive } from "@/lib/queries";
+import { plantsQuery, roomQuery, useRoomFeed, useRoomLive } from "@/lib/queries";
 import { nicknameError, saveNickname, useIdentity } from "@/lib/identity";
 import { allCareStatuses, CARE_LABELS, type CareStatus } from "@/services/care";
 import { getServices, CARE_TYPES, type CareType, type Photo, type Plant, type PlantCategory, type RoomPlant } from "@/services";
@@ -190,24 +190,7 @@ function RoomPage() {
             </TabsContent>
             <TabsContent value="feed">
               <PostBox onPost={(text, photo) => run(() => svc.postUpdate(room.id, text, photo, actor))} />
-              <ul className="mt-3 space-y-2">
-                {state.feed.map((ev) => (
-                  <li key={ev.id} className={cn("rounded-2xl bg-cream p-3 text-sm", ev.undone_at && "opacity-60")}>
-                    <p>
-                      <span className="font-bold text-moss">{ev.actor_name}</span>{" "}
-                      {ev.type === "post" ? <span className="block whitespace-pre-wrap pt-1">{ev.text}</span> : <span className={cn(ev.undone_at && "line-through")}>{ev.text}</span>}
-                    </p>
-                    {ev.photo_url && <img src={ev.photo_url} alt={`Photo from ${ev.actor_name}`} loading="lazy" className="mt-2 max-h-60 rounded-xl object-cover" />}
-                    <p className="mt-1 flex items-center gap-3 text-xs text-muted-foreground">
-                      {new Date(ev.created_at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
-                      {ev.undo_payload && !ev.undone_at && (
-                        <button type="button" className="inline-flex items-center gap-1 font-bold text-terracotta underline" onClick={() => run(() => svc.undoEvent(ev.id, actor), "Undone")}><Undo2 className="h-3 w-3" /> Undo</button>
-                      )}
-                      {ev.undone_at && <span>Undone</span>}
-                    </p>
-                  </li>
-                ))}
-              </ul>
+              <FeedList roomId={roomId} onUndo={(id) => run(() => svc.undoEvent(id, actor), "Undone")} />
             </TabsContent>
           </Tabs>
         </aside>
@@ -240,6 +223,42 @@ export function GardenDeleted() {
       <h1 className="text-2xl">This garden was deleted</h1>
       <Link to="/" className="mt-4 inline-block underline">All gardens</Link>
     </div>
+  );
+}
+
+/** The Feed tab's list: the state's newest events, then older pages on "Load older" (#210). */
+function FeedList({ roomId, onUndo }: { roomId: string; onUndo: (eventId: string) => void }) {
+  const { events, hasOlder, loadOlder, loadingOlder } = useRoomFeed(roomId);
+  async function onLoadOlder() {
+    const result = await loadOlder();
+    if (result.error) toast.error(result.error.message);
+  }
+  return (
+    <>
+      <ul className="mt-3 space-y-2">
+        {events.map((ev) => (
+          <li key={ev.id} className={cn("rounded-2xl bg-cream p-3 text-sm", ev.undone_at && "opacity-60")}>
+            <p>
+              <span className="font-bold text-moss">{ev.actor_name}</span>{" "}
+              {ev.type === "post" ? <span className="block whitespace-pre-wrap pt-1">{ev.text}</span> : <span className={cn(ev.undone_at && "line-through")}>{ev.text}</span>}
+            </p>
+            {ev.photo_url && <img src={ev.photo_url} alt={`Photo from ${ev.actor_name}`} loading="lazy" className="mt-2 max-h-60 rounded-xl object-cover" />}
+            <p className="mt-1 flex items-center gap-3 text-xs text-muted-foreground">
+              {new Date(ev.created_at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
+              {ev.undo_payload && !ev.undone_at && (
+                <button type="button" className="inline-flex items-center gap-1 font-bold text-terracotta underline" onClick={() => onUndo(ev.id)}><Undo2 className="h-3 w-3" /> Undo</button>
+              )}
+              {ev.undone_at && <span>Undone</span>}
+            </p>
+          </li>
+        ))}
+      </ul>
+      {hasOlder && (
+        <Button type="button" variant="secondary" size="sm" className="mt-3 w-full" disabled={loadingOlder} onClick={() => void onLoadOlder()}>
+          {loadingOlder ? "Loading…" : "Load older"}
+        </Button>
+      )}
+    </>
   );
 }
 

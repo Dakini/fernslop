@@ -14,7 +14,7 @@ import type {
   RoomPlant,
   UndoPayload,
 } from "../types";
-import { ROOM_LIMITS } from "../types";
+import { FEED_PAGE_SIZE, ROOM_LIMITS } from "../types";
 import { SEED_PLANTS } from "./plants-seed";
 
 /** Server-side follow row: the token never leaves the "server". */
@@ -56,6 +56,8 @@ export const memoryStorage = (): MockStorage => {
 const ROOM_PAGE_SIZE = 30;
 const MAX_ROOM_PAGE_SIZE = 100;
 const SEARCH_LIMIT = 12;
+/** Feed paging like the server (#210); the mock never caps posts. */
+const MAX_FEED_PAGE_SIZE = 100;
 
 const LS_KEY = "fernslop:mockdb:v2";
 export const localStorageAdapter = (): MockStorage => ({
@@ -288,6 +290,29 @@ export function createMockService(opts: MockOptions = {}): GardenService & { _db
     }
   }
 
+  // A room's feed newest first, like the server: created_at, then save order (feed_events is in save order).
+  function roomFeed(roomId: string): FeedEvent[] {
+    return db.feed_events
+      .map((e, i) => ({ e, i }))
+      .filter(({ e }) => e.room_id === roomId)
+      .sort((a, b) => b.e.created_at.localeCompare(a.e.created_at) || b.i - a.i)
+      .map(({ e }) => e);
+  }
+
+  // One page after the event `before` (the cursor is an event id, as on the server).
+  function feedPage(roomId: string, before: string | null | undefined, limit: number) {
+    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_FEED_PAGE_SIZE)
+      throw new Error(`limit must be a whole number from 1 to ${MAX_FEED_PAGE_SIZE}`);
+    let events = roomFeed(roomId);
+    if (before) {
+      const at = events.findIndex((e) => e.id === before);
+      if (at < 0) throw new Error("before is not a cursor this server gave out");
+      events = events.slice(at + 1);
+    }
+    const page = events.slice(0, limit);
+    return { events: page, next: events.length > limit ? page[page.length - 1]!.id : null };
+  }
+
   if (!storage.load() && opts.seed !== false) seed();
 
   return {
@@ -325,14 +350,20 @@ export function createMockService(opts: MockOptions = {}): GardenService & { _db
       reload();
       const room = db.rooms.find((r) => r.id === roomId);
       if (!room) return wait(null);
+      const feed = feedPage(room.id, null, FEED_PAGE_SIZE);
       return wait({
         room,
         plants: livePlants(room.id),
         areas: liveAreas(room.id),
-        feed: db.feed_events
-          .filter((e) => e.room_id === room.id)
-          .sort((a, b) => b.created_at.localeCompare(a.created_at)),
+        feed: feed.events,
+        feed_next: feed.next,
       });
+    },
+
+    async getRoomFeed(roomId, { before, limit = FEED_PAGE_SIZE } = {}) {
+      reload();
+      roomById(roomId);
+      return wait(feedPage(roomId, before, limit));
     },
 
     async deleteRoom(roomId) {
