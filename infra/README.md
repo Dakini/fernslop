@@ -362,8 +362,8 @@ get /api/health   # 200 application/json <bytes> {"status":"ok","version":"<tag>
 1. **Create prod.** Check the names, then create the stack with the tag dev runs:
 
    ```sh
-   infra/deploy.sh prod --names     # stack prod-fernslop, deploy doc prod-fernslop-deploy; calls no AWS
-   DOMAIN=fernslop.example.com infra/deploy.sh prod "$TAG"
+   EIP_ALLOCATION_ID=eipalloc-09d8eac2455df4b23 EIP_ADDRESS=16.61.18.144 infra/deploy.sh prod --names     # stack prod-fernslop, deploy doc prod-fernslop-deploy; calls no AWS
+   EIP_ALLOCATION_ID=eipalloc-09d8eac2455df4b23 EIP_ADDRESS=16.61.18.144 DOMAIN=fernslop.example.com infra/deploy.sh prod "$TAG"
    ```
 
    The stack is created with `ImageTag=$TAG`. The script then waits for `https://fernslop.example.com/api/health` to report the tag, and that wait **will fail**: Caddy gets its certificate only once DNS points at prod (step 7), so after about 10 minutes it prints `Not reporting ... after 10 minutes` and exits 1. That is expected; you can stop it with Ctrl-C once it prints `Waiting for`. It also prints a line asking you to create a DNS A record: do not, until step 7. Until then every certificate attempt by prod's Caddy fails, and Let's Encrypt limits failed attempts per hour, so the check below stops prod's Caddy.
@@ -491,7 +491,7 @@ get /api/health   # 200 application/json <bytes> {"status":"ok","version":"<tag>
 
    Undo: nothing to undo; it only reads. If a check fails, stay here: the live site is still dev, and dev's `app` is still stopped (the site answers errors). To give up, undo step 4 (delete the object) and step 3 (start dev's `app` again); nothing is lost.
 
-7. **Switch the DNS.** This is the cutover: from here on, writes go to prod. In Cloudflare (DNS, Records), edit the `fernslop` A record from dev's Elastic IP to prod's, proxy status DNS only. Write down the old value first (`echo "$DEV_IP"` has it). Then wait until it resolves, and start prod's Caddy, which gets its certificate once the name resolves to it:
+7. **Switch the DNS.** This is the cutover: from here on, writes go to prod. In Cloudflare (DNS, Records), edit the `fernslop` A record from dev's Elastic IP to prod's (`16.61.18.144`, the allocation prod was created with in step 1), proxy status DNS only. Write down the old value first (`echo "$DEV_IP"` has it). Then wait until it resolves, and start prod's Caddy, which gets its certificate once the name resolves to it:
 
    ```sh
    echo "$PROD_IP"
