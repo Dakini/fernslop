@@ -82,3 +82,23 @@ def test_large_phone_photo_is_shrunk_in_the_browser_and_posts(new_gardener):
     expect(posted).to_have_attribute("src", re.compile(r"/api/photos/[^/]+$"))
     image_has_loaded(page, posted)
     assert posted.evaluate("(el) => [el.naturalWidth, el.naturalHeight]") == [2048, 1536]
+
+
+# The start of an iPhone HEIC: an ISO-BMFF "ftyp" box naming the heic brand.
+HEIC = b"\x00\x00\x00\x18ftypheic\x00\x00\x00\x00mif1heic" + bytes(64)
+
+
+def test_heic_renamed_jpg_is_refused_in_the_browser_without_a_request(new_gardener):
+    page = new_gardener().new_page()
+    create_garden(page, f"E2E heic garden {uuid.uuid4().hex[:8]}")
+    uploads, errors = [], []
+    page.on("request", lambda r: r.method == "POST" and "/api/photos" in r.url and uploads.append(r.url))
+    page.on("console", lambda m: m.type == "error" and errors.append(m.text))
+
+    page.get_by_role("tab", name="Feed").click()
+    page.locator("#post-photo").set_input_files({"name": "leaf.jpg", "mimeType": "image/jpeg", "buffer": HEIC})
+
+    expect(page.get_by_text("Please use a JPG, PNG or WebP image")).to_be_visible()
+    expect(page.get_by_alt_text("Photo to post")).to_have_count(0)
+    assert uploads == []
+    assert errors == []
