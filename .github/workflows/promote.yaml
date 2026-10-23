@@ -1,0 +1,143 @@
+# Manual: promotes the image that dev runs to prod. It builds nothing: the tag comes from the commit that CI's
+# `deploy-dev` job marked with the git tag `deployed-dev` (infra/build.sh --print-tag gives the same tag CI pushed),
+# and the prod instance pulls that tag from ECR through the SSM document. Start it from the Actions tab or with
+#   gh workflow run promote.yaml --ref main
+# The `production` environment holds AWS_DEPLOY_ROLE_ARN, INSTANCE_ID, DEPLOY_DOCUMENT and PUBLIC_URL (AWS_REGION
+# comes from the repository unless the environment sets its own). See infra/README.md, "Promote to prod".
+
+name: Promote to prod
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  promote:
+    name: Promote dev's image to prod
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: production
+    permissions:
+      id-token: write
+      contents: read
+    concurrency:
+      group: promote-prod
+      cancel-in-progress: false
+    env:
+      AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      INSTANCE_ID: ${{ vars.INSTANCE_ID }}
+      DEPLOY_DOCUMENT: ${{ vars.DEPLOY_DOCUMENT }}
+      PUBLIC_URL: ${{ vars.PUBLIC_URL }}
+    steps:
+      # The prod role trusts the environment, not the branch, so the branch is checked here (and should be limited
+      # in the environment's settings too)
+      - name: Only run from main
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Promote only runs from main, not '$GITHUB_REF'. Start it with: gh workflow run promote.yaml --ref main"
+            exit 1
+          fi
+
+      - name: Check that the deployed-dev tag exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/deployed-dev" > /dev/null 2>&1; then
+            echo "::error::The git tag deployed-dev does not exist. CI's deploy-dev job creates it once a push to main is live on dev, and nothing has reached dev yet."
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/deployed-dev
+          fetch-depth: 1
+          persist-credentials: false
+
+      # Same tag build.sh pushed for this commit: no AWS, no docker
+      - name: Work out the image tag
+        id: tag
+        run: |
+          tag=$(infra/build.sh --print-tag)
+          if ! [[ "$tag" =~ ^[0-9]{8}-[0-9]{6}-[0-9a-f]{7}$ ]]; then
+            echo "::error::build.sh --print-tag did not give an image tag: '$tag'"
+            exit 1
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "deployed-dev is $(git rev-parse HEAD), image $tag"
+
+      - name: Check the settings
+        run: |
+          missing=""
+          for name in AWS_DEPLOY_ROLE_ARN AWS_REGION INSTANCE_ID DEPLOY_DOCUMENT PUBLIC_URL; do
+            if [ -z "${!name}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Empty variables (the production environment, and AWS_REGION on the repo):$missing"
+            exit 1
+          fi
+
+      # The same pin is used by every AWS job (ci.yaml too)
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ env.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # `aws ssm wait` gives up after 100 seconds, so poll. The first lookup can fail until SSM knows the command.
+      - name: Run the deploy document
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          command_id=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "$DEPLOY_DOCUMENT" \
+            --parameters "tag=$TAG" \
+            --query 'Command.CommandId' --output text)
+          echo "Command $command_id: $DEPLOY_DOCUMENT with tag $TAG on $INSTANCE_ID"
+
+          status=""
+          for _ in $(seq 1 180); do
+            status=$(aws ssm get-command-invocation --command-id "$command_id" --instance-id "$INSTANCE_ID" \
+              --query Status --output text 2> /dev/null || true)
+            case "$status" in
+              Pending | InProgress | Delayed | "") sleep 10 ;;
+              *) break ;;
+            esac
+          done
+
+          echo "Status: ${status:-unknown}"
+          echo "--- stdout"
+          aws ssm get-command-invocation --command-id "$command_id" --instance-id "$INSTANCE_ID" \
+            --query StandardOutputContent --output text || true
+          if [ "$status" != "Success" ]; then
+            echo "--- stderr"
+            aws ssm get-command-invocation --command-id "$command_id" --instance-id "$INSTANCE_ID" \
+              --query StandardErrorContent --output text || true
+            echo "::error::The deploy document ended with status '${status:-unknown}'"
+            exit 1
+          fi
+
+      # The old container answers /api/health too, so only the tag proves the new one is serving
+      - name: Wait for prod to report the tag
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          url="${PUBLIC_URL%/}/api/health"
+          body="$RUNNER_TEMP/health.json"
+          for i in $(seq 1 24); do
+            rm -f "$body"
+            code=$(curl -sS -o "$body" -w '%{http_code}' --max-time 5 "$url" || true)
+            echo "attempt $i: HTTP $code"
+            if [ "$code" = "200" ] && jq -e --arg tag "$TAG" '.status == "ok" and .version == $tag' "$body" > /dev/null 2>&1; then
+              echo "$url reports $TAG"
+              echo "Promoted image \`$TAG\` to prod: $url reports status ok, version $TAG." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::$url did not report status ok and version $TAG within about 2 minutes. Expected tag $TAG. Last body:"
+          cat "$body" 2> /dev/null || echo "(none)"
+          echo "Promote of image \`$TAG\` to prod FAILED: $url did not report version $TAG. Prod was not rolled back." >> "$GITHUB_STEP_SUMMARY"
+          exit 1
