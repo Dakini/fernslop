@@ -43,3 +43,25 @@ Notes for QA / the PM:
 - The tag-existence check uses `gh api` (preinstalled on the runner) rather than a `git ls-remote`, because there is no checkout yet at that point and the repository may be private.
 - `deployed-dev` is checked out by tag name at run time, so if a `main` push moves the tag between the existence check and checkout, the newer commit is promoted; that is the tag's current meaning, so I left it.
 - The README's example prod document name is `prod-fernslop-deploy`, taken from the existing naming line at the top of the README.
+
+
+## QA: PASS
+
+Read `.github/workflows/promote.yaml` and `infra/README.md` against each criterion. The workflow was not run; no AWS or GitHub calls, no push, no code changed.
+
+- [x] Trigger `workflow_dispatch` only, no inputs; one job with `environment: production`, `contents: read`, `id-token: write`, `concurrency` `promote-prod` (`cancel-in-progress: false`), `timeout-minutes: 45`; first step fails with one line unless `$GITHUB_REF` is `refs/heads/main`, before checkout and AWS - PASS
+- [x] Checks out `refs/tags/deployed-dev` (`fetch-depth: 1`, `persist-credentials: false`); stops with a clear message if the tag is missing (`gh api .../git/ref/tags/deployed-dev`, run before checkout); tag from `infra/build.sh --print-tag`, rejected unless it matches `^[0-9]{8}-[0-9]{6}-[0-9a-f]{7}$`. `build.sh --print-tag` uses only `git show`/`rev-parse` on HEAD, so it works on a depth-1 checkout (locally it printed `20261023-192452-b4346b1`, which matches the regex) - PASS
+- [x] `configure-aws-credentials` at `e1253824...` (v6.3.0), the same pin as `ci.yaml` (lines 174, 244), with `AWS_DEPLOY_ROLE_ARN` and `AWS_REGION` from the job env (the `production` environment's vars). The "Check the settings" step, before the AWS step, fails if any of the five variables is empty - PASS
+- [x] `aws ssm send-command` with `--document-name "$DEPLOY_DOCUMENT"`, `--instance-ids "$INSTANCE_ID"`, `--parameters "tag=$TAG"`; values come from `env:`, and no `${{ }}` appears inside any `run:`. It polls the invocation, prints stdout, and prints stderr and exits 1 unless the status is `Success`. grep finds no `AWS-RunShellScript`, CloudFormation, ECR, S3 or `deploy.sh` - PASS
+- [x] Health poll of `$PUBLIC_URL/api/health`, 24 x 5 s (~2 min), passes only on HTTP 200 with `.status == "ok" and .version == $TAG` (jq). On timeout it prints the expected tag and the last body and exits 1; no rollback. The tag and result go to `$GITHUB_STEP_SUMMARY` on both outcomes - PASS
+- [x] No `docker build`, `buildx`, build, ECR login or push (grep of docker/buildx/ecr/cloudformation/s3/deploy.sh/RunShellScript matches only a comment). Both actions are pinned to full SHAs with version comments, the same as `ci.yaml`. actionlint with shellcheck reports 0 errors - PASS
+- [x] `infra/README.md` has a "Promote to prod" section (line 246): start it from the Actions tab or `gh workflow run promote.yaml --ref main`; a table of the five `production` environment variables; and the instruction to limit the `production` environment's deployment branches to `main` because the prod role trusts the environment, not the branch - PASS
+
+Constraints: only `promote.yaml` (new) and the README section were added, and `ci.yaml` is untouched (the only uncommitted change in the tree is `AGENTS.md`, which is not part of this issue).
+
+Commands run:
+- `uvx --with shellcheck-py --from actionlint-py actionlint -verbose` - Found 0 errors in 2 files (`promote.yaml`, `ci.yaml`)
+- `infra/build.sh --print-tag` (local, read-only) - tag matches the regex
+- `grep` for forbidden commands and for action pins in `promote.yaml` and `ci.yaml`
+
+Tests: none apply (config only); the workflow itself needs a live run after #237.
