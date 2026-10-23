@@ -103,7 +103,13 @@ export function createHttpService(
   };
 
   return {
-    listRooms: () => json("/rooms"),
+    listRooms(page = {}) {
+      const params = new URLSearchParams();
+      if (page.limit !== undefined) params.set("limit", String(page.limit));
+      if (page.before) params.set("before", page.before);
+      const query = params.toString();
+      return json(query ? `/rooms?${query}` : "/rooms");
+    },
     createRoom: (input) => json("/rooms", body("POST", input)),
     async getRoomState(roomId) {
       const res = await send(`/rooms/${encodeURIComponent(roomId)}`);

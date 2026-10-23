@@ -46,6 +46,11 @@ export const memoryStorage = (): MockStorage => {
   return { load: () => data, save: (db) => (data = structuredClone(db)) };
 };
 
+/** Same paging and search caps as the server (#202). */
+const ROOM_PAGE_SIZE = 30;
+const MAX_ROOM_PAGE_SIZE = 100;
+const SEARCH_LIMIT = 12;
+
 const LS_KEY = "fernslop:mockdb:v2";
 export const localStorageAdapter = (): MockStorage => ({
   load: () => {
@@ -282,18 +287,25 @@ export function createMockService(opts: MockOptions = {}): GardenService & { _db
   return {
     _db: () => db,
 
-    async listRooms() {
+    async listRooms({ before, limit = ROOM_PAGE_SIZE } = {}) {
       reload();
-      const rooms = [...db.rooms].sort((a, b) => b.last_activity_at.localeCompare(a.last_activity_at));
-      return wait(
-        rooms.map((room) => ({
+      if (!Number.isInteger(limit) || limit < 1 || limit > MAX_ROOM_PAGE_SIZE)
+        throw new Error(`limit must be a whole number from 1 to ${MAX_ROOM_PAGE_SIZE}`);
+      // Same keyset cursor as the server: newest activity first, then created_at, then id.
+      const key = (r: Room) => `${r.last_activity_at}_${r.created_at}_${r.id}`;
+      let rooms = [...db.rooms].sort((a, b) => (key(a) < key(b) ? 1 : key(a) > key(b) ? -1 : 0));
+      if (before) rooms = rooms.filter((r) => key(r) < before);
+      const page = rooms.slice(0, limit);
+      return wait({
+        rooms: page.map((room) => ({
           room,
           plants: db.room_plants
             .filter((p) => p.room_id === room.id && !p.deleted_at)
             .map((p) => ({ x_pct: p.x_pct, y_pct: p.y_pct, category: plantById(p.plant_id).category })),
           areas: db.room_areas.filter((x) => x.room_id === room.id && !x.deleted_at),
         })),
-      );
+        next: rooms.length > limit ? key(page[page.length - 1]!) : null,
+      });
     },
 
     async createRoom(input) {
@@ -335,10 +347,10 @@ export function createMockService(opts: MockOptions = {}): GardenService & { _db
 
     async searchPlants(query) {
       const q = query.trim().toLowerCase();
-      if (!q) return wait(plants.slice(0, 12));
-      return wait(
-        plants.filter((p) => p.common_name.toLowerCase().includes(q) || p.scientific_name.toLowerCase().includes(q)),
-      );
+      const matches = q
+        ? plants.filter((p) => p.common_name.toLowerCase().includes(q) || p.scientific_name.toLowerCase().includes(q))
+        : plants;
+      return wait(matches.slice(0, SEARCH_LIMIT));
     },
 
     async identifyPlant(file) {

@@ -1,9 +1,15 @@
-import { queryOptions, useQueryClient } from "@tanstack/react-query";
+import { infiniteQueryOptions, queryOptions, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { getServices } from "@/services";
 
+/** The index, one page per `listRooms` call. A refetch reloads as many pages as were loaded. */
 export const roomsQuery = () =>
-  queryOptions({ queryKey: ["rooms"], queryFn: () => getServices().listRooms() });
+  infiniteQueryOptions({
+    queryKey: ["rooms"],
+    queryFn: ({ pageParam }) => getServices().listRooms({ before: pageParam }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (page) => page.next,
+  });
 
 export const roomQuery = (roomId: string) =>
   queryOptions({ queryKey: ["room", roomId], queryFn: () => getServices().getRoomState(roomId) });

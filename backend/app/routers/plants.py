@@ -1,5 +1,6 @@
 """Plant reference table: list, search and identify."""
 
+from itertools import islice
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, UploadFile
@@ -33,11 +34,12 @@ def search_plants(store: Annotated[StoreProtocol, Depends(get_store)], q: str = 
     needle = q.strip().casefold()
     if not needle:
         return plants[:DEFAULT_SEARCH_LIMIT]
-    return [
+    matches = (
         plant
         for plant in plants
         if needle in plant.common_name.casefold() or needle in plant.scientific_name.casefold()
-    ]
+    )
+    return list(islice(matches, DEFAULT_SEARCH_LIMIT))
 
 
 @router.post("/plants/identify", operation_id="identifyPlant", dependencies=[rate_limited(IDENTIFY)])

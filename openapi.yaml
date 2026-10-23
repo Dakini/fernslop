@@ -89,16 +89,33 @@ paths:
       tags: [Rooms]
       operationId: listRooms
       x-service-method: listRooms
-      summary: List all rooms with thumbnail data
-      description: Sorted by `last_activity_at`, most recent first. Excludes soft-deleted plants and areas.
+      summary: List rooms with thumbnail data, one page at a time
+      description: |
+        Sorted by `last_activity_at`, most recent first (then `created_at`, then `id`). Excludes
+        deleted rooms and soft-deleted plants and areas. Returns at most `limit` rooms plus `next`,
+        the cursor to pass as `before` for the following page; `next` is null on the last page.
+        Runs the same number of queries whatever the number of rooms. A room whose activity
+        changes between two page requests can move to an earlier page, so clients should drop
+        rooms they already show.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          description: Page size. Anything but a whole number from 1 to 100 is a 400.
+          schema: { type: integer, minimum: 1, maximum: 100, default: 30 }
+        - name: before
+          in: query
+          required: false
+          description: Opaque cursor from a previous page's `next`. A malformed one is a 400.
+          schema: { type: string }
       responses:
         "200":
-          description: Room summaries
+          description: One page of room summaries
           content:
             application/json:
-              schema:
-                type: array
-                items: { $ref: "#/components/schemas/RoomSummary" }
+              schema: { $ref: "#/components/schemas/RoomPage" }
+        "400":
+          $ref: "#/components/responses/BadRequest"
     post:
       tags: [Rooms]
       operationId: createRoom
@@ -205,7 +222,8 @@ paths:
       summary: Search plants by name
       description: |
         Case-insensitive substring match on `common_name` or `scientific_name`.
-        If `q` is empty or only whitespace, returns the first 12 plants.
+        Returns at most 12 plants, in reference-table order. If `q` is empty or only whitespace,
+        returns the first 12 plants.
       parameters:
         - name: q
           in: query
@@ -1154,6 +1172,18 @@ components:
         areas:
           type: array
           items: { $ref: "#/components/schemas/RoomArea" }
+
+    RoomPage:
+      type: object
+      required: [rooms, next]
+      properties:
+        rooms:
+          type: array
+          maxItems: 100
+          items: { $ref: "#/components/schemas/RoomSummary" }
+        next:
+          type: [string, "null"]
+          description: Cursor for the next page (pass as `before`), or null on the last page.
 
     RoomState:
       type: object

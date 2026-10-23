@@ -113,6 +113,12 @@ export interface RoomSummary {
   areas: RoomArea[];
 }
 
+/** One page of the index; `next` is the `before` cursor for the following page, null on the last. */
+export interface RoomPage {
+  rooms: RoomSummary[];
+  next: string | null;
+}
+
 export interface RoomState {
   room: Room;
   plants: RoomPlant[];
@@ -128,7 +134,8 @@ export interface IdentifyCandidate {
 export type AreaInput = Pick<RoomArea, "label" | "shape" | "x_pct" | "y_pct" | "w_pct" | "h_pct" | "colour">;
 
 export interface GardenService {
-  listRooms(): Promise<RoomSummary[]>;
+  /** Newest activity first, `limit` (default 30, at most 100) rooms per page; pass a page's `next` as `before`. */
+  listRooms(page?: { before?: string | null; limit?: number }): Promise<RoomPage>;
   createRoom(input: { name: string; description?: string; region?: string }): Promise<Room>;
   getRoomState(roomId: string): Promise<RoomState | null>;
   /**
@@ -139,6 +146,7 @@ export interface GardenService {
   deleteRoom(roomId: string): Promise<boolean>;
 
   listPlants(): Promise<Plant[]>;
+  /** At most 12 matches, in reference order. */
   searchPlants(query: string): Promise<Plant[]>;
   identifyPlant(file: File): Promise<IdentifyCandidate[]>;
 
