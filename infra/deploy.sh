@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Deploy Fernslop to AWS: ECR repo -> image -> EC2 stack (first time) or roll the instance forward (after).
 # Usage: infra/deploy.sh [domain]   (default AWS credentials and region; the domain is only read on the first deploy,
-#        and asked for if missing. ALLOW_PLAIN_HTTP=true infra/deploy.sh creates a plain-HTTP stack with no domain.)
+#        and asked for if missing. ALLOW_PLAIN_HTTP=true infra/deploy.sh creates a plain-HTTP stack with no domain.
+#        CFN_ROLE_ARN=<arn> runs the stack updates as that CloudFormation service role: CI, infra/github-oidc-stack.yaml.)
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -30,7 +31,9 @@ if [ "$STACK_EXISTS" = false ] && [ -z "$DOMAIN_ARG" ] && [ "$PLAIN" != "true" ]
 fi
 
 # 1. Registry
-aws cloudformation deploy --stack-name fernslop-ecr --template-file infra/ecr-stack.yaml --no-fail-on-empty-changeset
+# ${CFN_ROLE_ARN:+...} adds --role-arn only when CFN_ROLE_ARN is set; operator deploys are unchanged
+aws cloudformation deploy --stack-name fernslop-ecr --template-file infra/ecr-stack.yaml --no-fail-on-empty-changeset \
+  ${CFN_ROLE_ARN:+--role-arn "$CFN_ROLE_ARN"}
 REPO=$(stack_output fernslop-ecr RepositoryUri)
 
 # 2. Image (the instance is ARM). :latest is what the instance's compose file runs.
@@ -45,7 +48,8 @@ if [ "$STACK_EXISTS" = true ]; then
   ALLOW=false
   if [ -z "$OLD_DOMAIN" ] || [ "$OLD_DOMAIN" = "None" ]; then ALLOW=true; fi
   aws cloudformation deploy --stack-name fernslop --template-file infra/ec2-stack.yaml \
-    --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --parameter-overrides AllowPlainHttp="$ALLOW"
+    --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --parameter-overrides AllowPlainHttp="$ALLOW" \
+    ${CFN_ROLE_ARN:+--role-arn "$CFN_ROLE_ARN"}
   INSTANCE=$(stack_output fernslop InstanceId)
   CMD=$(aws ssm send-command --instance-ids "$INSTANCE" --document-name AWS-RunShellScript \
     --parameters 'commands=["set -e","cd /opt/app",
@@ -56,7 +60,8 @@ if [ "$STACK_EXISTS" = true ]; then
 else
   aws cloudformation deploy --stack-name fernslop --template-file infra/ec2-stack.yaml \
     --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset \
-    --parameter-overrides DomainName="$DOMAIN_ARG" AllowPlainHttp="$PLAIN"
+    --parameter-overrides DomainName="$DOMAIN_ARG" AllowPlainHttp="$PLAIN" \
+    ${CFN_ROLE_ARN:+--role-arn "$CFN_ROLE_ARN"}
 fi
 
 URL=$(stack_output fernslop Url)
