@@ -48,3 +48,37 @@ def test_photo_posted_by_one_gardener_appears_live_in_another_gardeners_feed(new
     seen = viewer.get_by_role("listitem").filter(has_text=post_text).get_by_role("img")
     expect(seen).to_have_attribute("src", re.compile(r"/api/photos/[^/]+$"))
     image_has_loaded(viewer, seen)
+
+
+# A 12 MP JPEG of about 6-7 MB, drawn in the page (a gradient with noise, so it compresses like a photo).
+LARGE_JPEG_JS = """async () => {
+  const w = 4000, h = 3000, c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  const ctx = c.getContext("2d"), img = ctx.createImageData(w, h), d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const g = (((i / 4) % w) / w) * 166;
+    d[i] = g + Math.random() * 89; d[i + 1] = g + Math.random() * 89; d[i + 2] = g + Math.random() * 89; d[i + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  const blob = await new Promise((r) => c.toBlob(r, "image/jpeg", 0.92));
+  return Array.from(new Uint8Array(await blob.arrayBuffer()));
+}"""
+
+
+def test_large_phone_photo_is_shrunk_in_the_browser_and_posts(new_gardener):
+    post_text = f"Whole bed {uuid.uuid4().hex[:8]}"
+    page = new_gardener().new_page()
+    create_garden(page, f"E2E big photo garden {uuid.uuid4().hex[:8]}")
+    jpeg = bytes(page.evaluate(LARGE_JPEG_JS))
+    assert len(jpeg) > 5 * 1024 * 1024  # over the server's limit as it is
+
+    page.get_by_role("tab", name="Feed").click()
+    page.get_by_label("Post an update").fill(post_text)
+    page.locator("#post-photo").set_input_files({"name": "bed.jpg", "mimeType": "image/jpeg", "buffer": jpeg})
+    expect(page.get_by_alt_text("Photo to post")).to_be_visible()
+    page.get_by_role("button", name="Post", exact=True).click()
+
+    posted = page.get_by_role("listitem").filter(has_text=post_text).get_by_role("img")
+    expect(posted).to_have_attribute("src", re.compile(r"/api/photos/[^/]+$"))
+    image_has_loaded(page, posted)
+    assert posted.evaluate("(el) => [el.naturalWidth, el.naturalHeight]") == [2048, 1536]
