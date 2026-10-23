@@ -2,19 +2,23 @@
 
 A success saves the ``post`` event and bumps the room's ``last_activity_at`` in
 one store transaction, then calls ``live.notify`` once after it has ended.
+A room takes at most ``MAX_POSTS_PER_DAY`` posts in any 24 hours; past that, 429.
 """
 
+import math
 import uuid
+from datetime import timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
+from starlette.exceptions import HTTPException
 
 from app import live, timestamps
 from app.auth import Actor, get_actor
 from app.body import JsonBody
 from app.errors import ApiError
 from app.models import FeedEvent
-from app.rate_limit import WRITE, rate_limited
+from app.rate_limit import TOO_FAST_MESSAGE, WRITE, rate_limited
 from app.store import StoreProtocol, get_store
 from app.text import (
     INVALID_CHARACTERS_MESSAGE,
@@ -33,6 +37,21 @@ BAD_TEXT_MESSAGE = "text must be a string"
 BAD_CHARACTERS_MESSAGE = INVALID_CHARACTERS_MESSAGE.format(label="Text")
 BAD_PHOTO_MESSAGE = "That photo didn't upload — try again"
 PHOTO_IN_USE_MESSAGE = "That photo is already in a post"
+
+# At most this many posts per room in any 24 hours (#210); undone posts count, other events do not.
+MAX_POSTS_PER_DAY = 200
+POST_WINDOW = timedelta(hours=24)
+
+
+def _check_post_cap(store: StoreProtocol, room_id: str, now) -> None:
+    """429 like ``app.rate_limit``, with ``Retry-After`` until the oldest post in the window ages out."""
+    count, oldest = store.count_posts_since(room_id, now - POST_WINDOW)
+    if count < MAX_POSTS_PER_DAY or oldest is None:
+        return
+    retry_after = max(1, math.ceil((oldest + POST_WINDOW - now).total_seconds()))
+    raise HTTPException(
+        429, TOO_FAST_MESSAGE.format(seconds=retry_after), headers={"Retry-After": str(retry_after)}
+    )
 
 
 @router.post("/rooms/{room_id}/posts", operation_id="postUpdate", status_code=201, dependencies=[rate_limited(WRITE)])
@@ -64,6 +83,7 @@ def post_update(
         room = store.get_room(room_id)
         if room is None:
             raise ApiError(404, ROOM_NOT_FOUND_MESSAGE)
+        _check_post_cap(store, room_id, now)
 
         photo_url = None
         if photo_id is not None:

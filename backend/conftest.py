@@ -1,12 +1,11 @@
 import os
 
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, text
-
 from app import rate_limit, sql_store
 from app.main import app
 from app.store import DATABASE_URL_ENV, close_stores
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, text
 
 # Set to a postgres URL to run the whole suite on Postgres instead of in-memory SQLite.
 TEST_DATABASE_URL_ENV = "FERNSLOP_TEST_DATABASE_URL"

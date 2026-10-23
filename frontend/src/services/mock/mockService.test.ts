@@ -60,6 +60,25 @@ describe("rooms", () => {
     await expect(svc.listRooms({ limit: 101 })).rejects.toThrow();
   });
 
+  it("pages the feed like the server: newest 50 in the state, then older pages without gaps or repeats, never capped", async () => {
+    const { svc } = setup(); // the clock stands still, so every event shares one timestamp
+    const room = await svc.createRoom({ name: "Busy" });
+    for (let i = 0; i < 230; i++) await svc.postUpdate(room.id, `post ${i}`, null, actor);
+
+    const state = (await svc.getRoomState(room.id))!;
+    await svc.postUpdate(room.id, "arrives in between", null, actor);
+    const texts = state.feed.map((e) => e.text);
+    let cursor = state.feed_next;
+    while (cursor) {
+      const page = await svc.getRoomFeed(room.id, { before: cursor, limit: 7 });
+      texts.push(...page.events.map((e) => e.text));
+      cursor = page.next;
+    }
+
+    expect(state.feed).toHaveLength(50);
+    expect(texts).toEqual(Array.from({ length: 230 }, (_, i) => `post ${229 - i}`));
+    await expect(svc.getRoomFeed(room.id, { before: "nope" })).rejects.toThrow();
+  });
 });
 
 describe("deleting a room", () => {
@@ -160,10 +179,10 @@ describe("room limits", () => {
     const first = await svc.addPlant(room.id, "plant-basil", actor);
     await svc.removePlant(first.id, actor);
     for (let i = 0; i < ROOM_LIMITS.plants; i++) await svc.addPlant(room.id, "plant-basil", actor);
-    const state = await svc.getRoomState(room.id);
-    const removal = state!.feed.find((e) => e.type === "plant_removed")!;
+    // 52 events: the removal is past the state's newest 50, so look it up in the store.
+    const removal = svc._db().feed_events.find((e) => e.type === "plant_removed")!;
     await expect(svc.undoEvent(removal.id, actor)).rejects.toThrow(/full/);
-    expect((await svc.getRoomState(room.id))!.feed.find((e) => e.id === removal.id)!.undone_at).toBeNull();
+    expect(svc._db().feed_events.find((e) => e.id === removal.id)!.undone_at).toBeNull();
   });
 
   it("won't undo an area deletion into a full room", async () => {

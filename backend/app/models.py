@@ -203,12 +203,20 @@ class RoomSummary(ApiModel):
 
 
 class RoomState(ApiModel):
-    """Everything needed to render a room."""
+    """Everything needed to render a room: the newest feed events only, ``feed_next`` pages back (#210)."""
 
     room: Room
     plants: list[RoomPlant]
     areas: list[RoomArea]
     feed: list[FeedEvent]
+    feed_next: str | None
+
+
+class FeedPage(ApiModel):
+    """Older feed events, newest first: ``next`` is the ``before`` cursor for the page after, or null on the last."""
+
+    events: list[FeedEvent]
+    next: str | None
 
 
 class RoomFollow(ApiModel):

@@ -7,7 +7,7 @@ from sqlalchemy import event
 
 from app.body import MAX_JSON_BODY_BYTES
 from app.main import app
-from app.models import Room
+from app.models import FeedEvent, Room
 from app.sql_store import SqlStore
 from app.store import get_store
 
@@ -141,12 +141,63 @@ def test_get_room_state_returns_room_live_plants_areas_and_feed(rooms_client, st
 
     assert response.status_code == 200
     body = response.json()
-    assert set(body) == {"room", "plants", "areas", "feed"}
+    assert set(body) == {"room", "plants", "areas", "feed", "feed_next"}
     assert body["room"]["id"] == elm
     assert body["room"]["name"] == "Elm Street Allotment"
     assert len(body["plants"]) == 4
     assert len(body["areas"]) == 2
     assert all(item["deleted_at"] is None for item in body["plants"] + body["areas"])
+
+
+def make_feed_event(room_id, created_at, **overrides):
+    fields = {
+        "id": str(uuid.uuid4()),
+        "room_id": room_id,
+        "type": "care_done",
+        "actor_name": "Tess",
+        "device_id": "device-1",
+        "room_plant_id": None,
+        "text": "watered the fern",
+        "photo_url": None,
+        "undo_payload": None,
+        "undone_at": None,
+        "created_at": created_at,
+    }
+    return FeedEvent(**{**fields, **overrides})
+
+
+def test_feed_pages_cover_equal_timestamps_without_gaps_or_repeats_while_events_arrive(rooms_client, store):
+    room = store.list_rooms()[0]
+    # 130 events, ten at a time sharing one timestamp, so many pages split a run of equal times.
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    for i in range(130):
+        store.save_feed_event(make_feed_event(room.id, base + timedelta(minutes=i // 10)))
+    expected = [event.id for event in store.list_feed_events(room.id)]
+
+    state = rooms_client.get(f"/api/rooms/{room.id}").json()
+    store.save_feed_event(make_feed_event(room.id, datetime(2027, 1, 1, tzinfo=UTC)))  # arrives in between
+    seen = [event["id"] for event in state["feed"]]
+    cursor = state["feed_next"]
+    while cursor is not None:
+        page = rooms_client.get(f"/api/rooms/{room.id}/feed", params={"before": cursor, "limit": 7}).json()
+        seen += [event["id"] for event in page["events"]]
+        cursor = page["next"]
+
+    assert len(state["feed"]) == 50
+    assert seen == expected
+
+
+def test_feed_page_with_a_cursor_from_another_room_or_a_bad_limit_gives_400(rooms_client, store):
+    elm, balcony = seed_room_id(store, "Elm Street Allotment"), seed_room_id(store, "Balcony Jungle")
+    store.save_feed_event(make_feed_event(balcony, datetime(2026, 1, 1, tzinfo=UTC), id="other-room-event"))
+
+    bad_cursor = rooms_client.get(f"/api/rooms/{elm}/feed", params={"before": "other-room-event"})
+    bad_limit = rooms_client.get(f"/api/rooms/{elm}/feed", params={"limit": "101"})
+    missing_room = rooms_client.get(f"/api/rooms/{uuid.uuid4()}/feed")
+
+    assert bad_cursor.status_code == 400
+    assert bad_limit.status_code == 400
+    assert missing_room.status_code == 404
 
 
 @pytest.mark.parametrize("room_id", ["not-a-uuid-at-all", str(uuid.uuid4())])

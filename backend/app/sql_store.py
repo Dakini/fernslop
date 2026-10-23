@@ -28,18 +28,21 @@ from sqlalchemy import (
     Column,
     Connection,
     Engine,
+    Index,
     Integer,
     LargeBinary,
     MetaData,
     String,
     Table,
     Text,
+    and_,
     create_engine,
     delete,
     event,
     exists,
     func,
     insert,
+    or_,
     select,
     update,
 )
@@ -90,6 +93,10 @@ _feed_events = _records(
     Column("room_id", _ID, nullable=False, index=True),
     Column("created_at", _TIMESTAMP, nullable=False),
     Column("photo_url", Text, nullable=True, index=True),
+)
+# Feed pages (#210) read one room's events newest first by ``created_at``, then ``seq``.
+_feed_page_index = Index(
+    "ix_feed_events_room_created_seq", _feed_events.c.room_id, _feed_events.c.created_at, _feed_events.c.seq
 )
 _follows = _records(
     "follows",
@@ -196,6 +203,7 @@ class SqlStore:
         self._ping_engine = _make_ping_engine(url)
         with self._tx() as conn:
             _metadata.create_all(conn)
+            _feed_page_index.create(conn, checkfirst=True)  # create_all skips indexes of existing tables
             if seed and conn.execute(select(_meta.c.key).where(_meta.c.key == "seeded")).first() is None:
                 self._load_seed()
 
@@ -425,6 +433,46 @@ class SqlStore:
             _feed_events.c.room_id == room_id,
             order=(_feed_events.c.created_at.desc(), _feed_events.c.seq.desc()),
         )
+
+    def list_feed_page(self, room_id: str, before_id: str | None, limit: int) -> list[FeedEvent]:
+        """At most ``limit`` events in ``list_feed_events`` order, starting just after the event ``before_id``.
+
+        Keyset paging on (``created_at``, ``seq``), so events sharing a timestamp are neither skipped nor
+        repeated, and events saved since the cursor was handed out do not shift the page. An unknown
+        ``before_id``, or one from another room, gives an empty list.
+        """
+        c = _feed_events.c
+        where = [c.room_id == room_id]
+        with self._tx() as conn:
+            if before_id is not None:
+                anchor = conn.execute(
+                    select(c.created_at, c.seq).where(c.id == before_id, c.room_id == room_id)
+                ).first()
+                if anchor is None:
+                    return []
+                where.append(
+                    or_(c.created_at < anchor.created_at, and_(c.created_at == anchor.created_at, c.seq < anchor.seq))
+                )
+            rows = conn.execute(
+                select(c.json).where(*where).order_by(c.created_at.desc(), c.seq.desc()).limit(limit)
+            ).scalars()
+            return [FeedEvent.model_validate_json(text) for text in rows]
+
+    def count_posts_since(self, room_id: str, since: datetime) -> tuple[int, datetime | None]:
+        """How many ``post`` events (undone ones too) the room has from ``since`` on, and the oldest one's time.
+
+        One aggregate query; the type lives only in the JSON, which pydantic writes without spaces, so
+        ``"type":"post"`` matches exactly the type field (a quote inside a string value is escaped).
+        """
+        c = _feed_events.c
+        with self._tx() as conn:
+            row = conn.execute(
+                select(func.count(), func.min(c.created_at)).where(
+                    c.room_id == room_id, c.created_at >= _stamp(since), c.json.like('%"type":"post"%')
+                )
+            ).one()
+        oldest = datetime.fromisoformat(row[1]) if row[1] is not None else None
+        return int(row[0]), oldest
 
     def get_feed_event(self, event_id: str) -> FeedEvent | None:
         return self._one(FeedEvent, _feed_events, _feed_events.c.id == event_id)

@@ -160,7 +160,8 @@ paths:
       x-service-method: getRoomState
       summary: Get everything needed to render a room
       description: |
-        Returns live (not soft-deleted) plants and areas, plus the full feed, newest first.
+        Returns live (not soft-deleted) plants and areas, plus the newest 50 feed events, newest
+        first, and `feed_next`, the cursor for older ones (`getRoomFeed`), null when there are none.
         The feed includes events that were undone; their `undone_at` is set.
       parameters:
         - $ref: "#/components/parameters/RoomId"
@@ -529,6 +530,47 @@ paths:
         "429":
           $ref: "#/components/responses/TooManyRequests"
 
+  /rooms/{roomId}/feed:
+    get:
+      tags: [Feed]
+      operationId: getRoomFeed
+      x-service-method: getRoomFeed
+      summary: Older feed events, one page at a time
+      description: |
+        Newest first (`created_at`, then the order events were saved), continuing exactly after
+        `before`: the room state's `feed_next` or a previous page's `next`. Events that share a
+        timestamp are neither skipped nor repeated, and events added since the cursor was handed
+        out do not shift the pages. Without `before`, starts at the newest event. Undone events are
+        included. Reads one page, not the whole feed.
+      parameters:
+        - $ref: "#/components/parameters/RoomId"
+        - name: before
+          in: query
+          required: false
+          description: Opaque cursor from `feed_next` or a page's `next`. One this room never gave out is a 400.
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          description: Page size. Anything but a whole number from 1 to 100 is a 400.
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        "200":
+          description: One page of feed events
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/FeedPage" }
+        "400":
+          description: A malformed or foreign `before`, or a bad `limit`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "404":
+          description: No room with this id (or it was deleted).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+
   /rooms/{roomId}/posts:
     post:
       tags: [Feed]
@@ -540,7 +582,8 @@ paths:
         `text` and `photo_id` must be non-empty. The photo must already be uploaded with
         `POST /photos`. The server copies that photo's `url` into the event's `photo_url`,
         so clients can't put arbitrary URLs in the feed. A photo can be in one post only:
-        upload it again to post it again.
+        upload it again to post it again. A room takes at most 200 posts in any 24 hours
+        (undone posts count; care, plant and area events do not).
       security: [{ actor: [] }]
       parameters:
         - $ref: "#/components/parameters/RoomId"
@@ -581,7 +624,17 @@ paths:
         "415":
           $ref: "#/components/responses/NotJson"
         "429":
-          $ref: "#/components/responses/TooManyRequests"
+          description: |
+            Too many writes from this client IP (see `TooManyRequests`), or the room already has 200
+            posts in the last 24 hours; then `Retry-After` counts until the oldest of them is 24 hours
+            old. Nothing is written. Message is `You're going a bit fast. Try again in N seconds.`
+          headers:
+            Retry-After:
+              description: Whole seconds until a post may succeed.
+              schema: { type: integer, minimum: 1 }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 
   /photos:
     post:
@@ -1243,9 +1296,22 @@ components:
           type: [string, "null"]
           description: Cursor for the next page (pass as `before`), or null on the last page.
 
+    FeedPage:
+      type: object
+      required: [events, next]
+      properties:
+        events:
+          type: array
+          maxItems: 100
+          description: Newest first.
+          items: { $ref: "#/components/schemas/FeedEvent" }
+        next:
+          type: [string, "null"]
+          description: Cursor for the next, older page (pass as `before`), or null on the last page.
+
     RoomState:
       type: object
-      required: [room, plants, areas, feed]
+      required: [room, plants, areas, feed, feed_next]
       properties:
         room: { $ref: "#/components/schemas/Room" }
         plants:
@@ -1256,8 +1322,12 @@ components:
           items: { $ref: "#/components/schemas/RoomArea" }
         feed:
           type: array
-          description: Newest first.
+          maxItems: 50
+          description: The newest 50 events at most, newest first.
           items: { $ref: "#/components/schemas/FeedEvent" }
+        feed_next:
+          type: [string, "null"]
+          description: Cursor for older events (pass as `before` to `getRoomFeed`), or null when there are none.
 
     IdentifyCandidate:
       type: object

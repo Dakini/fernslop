@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import type {
   Actor,
   FeedEvent,
+  FeedPage,
   GardenService,
   Photo,
   RoomState,
@@ -136,6 +137,15 @@ export function createHttpService(
         throw new Error(GENERIC_ERROR);
       }
       return { ...state, feed: state.feed.map(fixEvent) };
+    },
+    async getRoomFeed(roomId, page = {}) {
+      const params = new URLSearchParams();
+      if (page.limit !== undefined) params.set("limit", String(page.limit));
+      if (page.before) params.set("before", page.before);
+      const query = params.toString();
+      const path = `/rooms/${encodeURIComponent(roomId)}/feed`;
+      const result = await json<FeedPage>(query ? `${path}?${query}` : path);
+      return { ...result, events: result.events.map(fixEvent) };
     },
     async deleteRoom(roomId) {
       const res = await send(`/rooms/${encodeURIComponent(roomId)}`, { method: "DELETE" });
