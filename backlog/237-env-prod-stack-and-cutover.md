@@ -26,3 +26,5 @@
 - Starts after #234, #235 and #236 are done. Use their stack names and commands, not today's hardcoded `fernslop`.
 - Changing `DomainName` changes the user data, but user data runs only on first boot, so the hand edits are what actually move dev.
 - Dev's domain stays one level deep (Cloudflare certificate limits). Prod's Caddy gets its certificate only after the switch.
+
+**Orchestrator decision:** a short dev stop/start for the `DomainName` change is acceptable, since dev serves no users after the cutover. Still stop on `Replacement: True`.
