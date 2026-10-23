@@ -819,6 +819,8 @@ paths:
           $ref: "#/components/responses/JsonBodyTooLarge"
         "415":
           $ref: "#/components/responses/NotJson"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
 
   /follows/unsubscribe:
     post:

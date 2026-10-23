@@ -98,7 +98,7 @@ def _send_confirmation(sender: EmailSender, follow: StoredFollow, room_name: str
         logger.error("Follow confirmation to %s failed: %s", follow.email, type(exc).__name__)
 
 
-@router.post("/follows/confirm", operation_id="confirmFollow")
+@router.post("/follows/confirm", operation_id="confirmFollow", dependencies=[rate_limited(WRITE)])
 def confirm_follow(raw: JsonBody, store: Annotated[StoreProtocol, Depends(get_store)]) -> dict[str, bool]:
     body = raw.object()
     token = body.get("token")
