@@ -176,11 +176,21 @@ Resources:
           echo "=== docker ==="
           dnf install -y docker
           systemctl enable --now docker
-          # Amazon Linux 2023's docker package ships no compose plugin
+          # Amazon Linux 2023's docker package ships no compose plugin. A fixed release, checked against its
+          # published SHA-256 before it is installed; a mismatch stops this script (set -e). To bump: take both
+          # values from https://github.com/docker/compose/releases/download/<version>/checksums.txt
+          COMPOSE_VERSION=v5.6.1
+          case "$(uname -m)" in
+            x86_64) COMPOSE_SHA256=47737f4236e6d3ccea7291995203f8f018058783b4c3a9469119811a0b5db8c0 ;;
+            aarch64) COMPOSE_SHA256=42cfa75f51ad0ccf290bad37899e0038a8c10a0069e85233ecc1d53e3ff1347d ;;
+            *) echo "No docker compose checksum for $(uname -m)" >&2; exit 1 ;;
+          esac
+          curl -fsSL "https://github.com/docker/compose/releases/download/$COMPOSE_VERSION/docker-compose-linux-$(uname -m)" \
+            -o /tmp/docker-compose
+          echo "$COMPOSE_SHA256  /tmp/docker-compose" | sha256sum -c -
           mkdir -p /usr/local/lib/docker/cli-plugins
-          curl -fsSL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$(uname -m)" \
-            -o /usr/local/lib/docker/cli-plugins/docker-compose
-          chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+          install -m 755 /tmp/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
+          rm /tmp/docker-compose
 
           echo "=== compose files ==="
           mkdir -p /opt/app
@@ -194,10 +204,13 @@ Resources:
               awslogs-group: ${LogGroup}
               tag: "{{.Name}}"
 
+          # Images pinned by multi-arch index digest; to bump one:
+          #   docker buildx imagetools inspect postgres:17-alpine | grep -m1 Digest
+          # Each service reads only its own env file (written below, mode 600).
           services:
             db:
-              image: postgres:17-alpine
-              env_file: .env
+              image: postgres:17-alpine@sha256:eee6c6e1b0894fa4fe0075eb054af9fd1cf39a35321c2d4110626cfe506411fb
+              env_file: db.env
               environment:
                 POSTGRES_USER: fernslop
                 POSTGRES_DB: fernslop
@@ -214,7 +227,7 @@ Resources:
 
             app:
               image: ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/fernslop:latest
-              env_file: .env
+              env_file: app.env
               environment:
                 # Only Caddy (its fixed address below) may set the client IP with X-Forwarded-For;
                 # the per-IP rate limits and the access logs use it.
@@ -226,8 +239,8 @@ Resources:
               restart: unless-stopped
 
             caddy:
-              image: caddy:2-alpine
-              env_file: .env
+              image: caddy:2-alpine@sha256:eb4d35b7452d1ab6171fbdbe8d9275b2301dad6dad92115d91e19fb9b24d510f
+              env_file: caddy.env
               ports:
                 - "80:80"
                 - "443:443"
@@ -293,21 +306,25 @@ Resources:
           CADDY
 
           echo "=== environment ==="
+          # One file per service, each mode 600: only db and app see the password, Caddy only its address
           umask 077
           PGPASSWORD=$(openssl rand -hex 32)
+          if [ -n "${DomainName}" ]; then
+            SITE_ADDRESS="${DomainName}"
+            PUBLIC_URL="https://${DomainName}"
+          else
+            SITE_ADDRESS=":80"
+            PUBLIC_URL="http://${ElasticIp}"
+          fi
+          echo "POSTGRES_PASSWORD=$PGPASSWORD" > db.env
           {
-            echo "POSTGRES_PASSWORD=$PGPASSWORD"
             echo "FERNSLOP_DATABASE_URL=postgresql+psycopg://fernslop:$PGPASSWORD@db:5432/fernslop"
-            if [ -n "${DomainName}" ]; then
-              echo "SITE_ADDRESS=${DomainName}"
-              echo "FERNSLOP_PUBLIC_URL=https://${DomainName}"
-            else
-              echo "SITE_ADDRESS=:80"
-              echo "FERNSLOP_PUBLIC_URL=http://${ElasticIp}"
-            fi
+            echo "FERNSLOP_PUBLIC_URL=$PUBLIC_URL"
             # No Swagger UI, ReDoc or OpenAPI JSON in production
             echo "FERNSLOP_API_DOCS=0"
-          } > .env
+          } > app.env
+          echo "SITE_ADDRESS=$SITE_ADDRESS" > caddy.env
+          chmod 600 db.env app.env caddy.env
 
           echo "=== db backups ==="
           # Nightly custom-format pg_dump streamed straight to S3 (never written to this disk), then a

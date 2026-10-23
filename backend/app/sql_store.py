@@ -44,7 +44,7 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.engine import make_url
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.pool import NullPool, StaticPool
 
 from app import timestamps
 from app.models import (
@@ -114,6 +114,7 @@ _DATA_TABLES = (_plants, _rooms, _room_plants, _areas, _feed_events, _follows, _
 # --- Connection setup -----------------------------------------------------------
 
 _POSTGRES_LOCK_KEY = 7_130_001  # arbitrary; the advisory lock key every Fernslop transaction takes
+PING_TIMEOUT_SECONDS = 3  # connecting to PostgreSQL, and the health check's SELECT 1
 
 
 def _make_engine(url: str) -> Engine:
@@ -150,7 +151,7 @@ def _make_engine(url: str) -> Engine:
 
 def _make_postgres_engine(url: str) -> Engine:
     # pre-ping replaces connections the server or a proxy has closed while idle in the pool.
-    engine = create_engine(url, pool_pre_ping=True)
+    engine = create_engine(url, pool_pre_ping=True, connect_args={"connect_timeout": PING_TIMEOUT_SECONDS})
 
     @event.listens_for(engine, "begin")
     def _on_begin(connection):
@@ -159,6 +160,21 @@ def _make_postgres_engine(url: str) -> Engine:
         connection.exec_driver_sql(f"SELECT pg_advisory_xact_lock({_POSTGRES_LOCK_KEY})")
 
     return engine
+
+
+def _make_ping_engine(url: str) -> Engine:
+    """A bare engine for ``SqlStore.ping``: no pool, no lock-taking ``begin`` hook, timeouts on PostgreSQL.
+
+    Every ping opens a fresh connection, so libpq's ``connect_timeout`` bounds the whole handshake even when the
+    server accepts the TCP connection but never answers (a pooled connection would wait on it forever).
+    """
+    connect_args: dict = {}
+    if make_url(url).get_backend_name() == "postgresql":
+        connect_args = {
+            "connect_timeout": PING_TIMEOUT_SECONDS,
+            "options": f"-c statement_timeout={PING_TIMEOUT_SECONDS * 1000}",
+        }
+    return create_engine(url, poolclass=NullPool, connect_args=connect_args)
 
 
 def _stamp(value: datetime) -> str:
@@ -177,6 +193,7 @@ class SqlStore:
         self._lock = threading.RLock()
         self._conn: Connection | None = None  # the open transaction's connection, if any
         self._engine = _make_engine(url)
+        self._ping_engine = _make_ping_engine(url)
         with self._tx() as conn:
             _metadata.create_all(conn)
             if seed and conn.execute(select(_meta.c.key).where(_meta.c.key == "seeded")).first() is None:
@@ -185,8 +202,19 @@ class SqlStore:
     def dispose(self) -> None:
         """Close the pooled connections. The store must not be used afterwards."""
         self._engine.dispose()
+        self._ping_engine.dispose()
 
     # --- Housekeeping -----------------------------------------------------------
+
+    def ping(self) -> None:
+        """Run ``SELECT 1``; raises when the database does not answer within a few seconds.
+
+        Takes neither the store lock nor PostgreSQL's advisory lock (nor SQLite's write lock): it runs on its
+        own short-lived connection from an engine without the lock hooks, so a long transaction cannot stall it.
+        On in-memory SQLite that connection sees a separate, empty database, which is fine for ``SELECT 1``.
+        """
+        with self._ping_engine.connect() as conn:
+            conn.exec_driver_sql("SELECT 1").scalar_one()
 
     def transaction(self) -> AbstractContextManager[None]:
         """Exclusive and atomic: an exception rolls back every write in the block. Re-entrant.
