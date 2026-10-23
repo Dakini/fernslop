@@ -26,3 +26,23 @@ A `stack` job in `.github/workflows/ci.yaml` builds and starts `docker-compose.y
 - Use the fixed project name `fernslop-ci` and the default `APP_PORT` 8000. Locally, use `APP_PORT` or `-p` to avoid clashing with a running `make up`
 - No new tests. This is config, and running the existing suites is the check. See `_docs/testing-guidelines.md` ("Running the backend suite on Postgres", "End-to-end") and `e2e/README.md`
 - Open question (does not block): the user has not confirmed the TM's definition of "integration" (backend suite on the stack's Postgres plus `/api/health`)
+
+## Engineer
+
+Commit d843071. Changed only `.github/workflows/ci.yaml` (new job `stack`, plus the header comment) and the new `.github/ci/compose.ci.yaml`.
+
+- Job `stack`: `needs: [backend, frontend]`, `timeout-minutes: 30`, no `continue-on-error`, no job `permissions`, checkout with `persist-credentials: false`. The new `uses:` is `actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2`, resolved with `gh api repos/actions/upload-artifact/commits/v7.0.2 --jq .sha`. Checkout and setup-uv reuse #225's pins and settings
+- `.github/ci/compose.ci.yaml` only adds `127.0.0.1:55432:5432` to `db`. `docker-compose.yaml` is unchanged, so `make up` behaves as before
+- Health: 30 tries, 2s apart, each with `curl --max-time 2`. It needs HTTP 200 and `jq -e '.status == "ok"'`. On failure it prints the last status and body
+- Backend on Postgres: `createdb -U fernslop fernslop_test` via `exec -T db`, then `uv sync --locked` and `uv run pytest` with `FERNSLOP_TEST_DATABASE_URL` pointing at `fernslop_test`. The step also fails if the pytest summary contains "skipped", which enforces the 0-skipped criterion
+- E2E: `uv sync --locked`, `uv run playwright install --with-deps chromium` and `uv run pytest` with `E2E_BASE_URL=http://localhost:8000`
+- `if: failure()` writes `docker compose ... logs --no-color` to `stack-logs.txt` and uploads it as artifact `stack-logs`. `if: always()` runs `down --volumes --remove-orphans`
+
+Local verification (macOS, Docker Desktop), with no push:
+- `docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:latest -color` printed nothing and exited 0
+- I ran the workflow's commands with `-p fernslop-ci`, and with `APP_PORT=8001` because the user's own `fernslop` stack holds 8000. `up -d --build --wait` brought db and app to healthy. The health check got 200 `{"status":"ok"}` after one reset connection on the first try. `createdb` succeeded
+- Backend on Postgres: 185 passed, 0 skipped, 0 failed. The SQLite run in #225 had 183 passed and 2 skipped, so the 2 `requires_postgres` tests ran. The app's `fernslop` database still had its 8 tables afterwards
+- E2E: 5 passed, 0 skipped, 0 failed, across all 3 files (`test_not_found.py` 1, `test_post_photo.py` 3, `test_shared_garden.py` 1). Chromium came from `uv run playwright install chromium`. I skipped `--with-deps` on macOS
+- Teardown: `down --volumes --remove-orphans` removed the containers, `fernslop-ci_pgdata` and the network. The user's `fernslop` project and its volumes were not touched
+
+No GitHub Actions run happened, because nothing was pushed. That leaves `--with-deps` on ubuntu-latest, the default port 8000 and the artifact upload unconfirmed until the first run.
