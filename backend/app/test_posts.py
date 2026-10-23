@@ -1,6 +1,7 @@
 import io
 import uuid
 from contextlib import contextmanager
+from datetime import timedelta
 from unittest.mock import MagicMock
 from urllib.parse import quote
 
@@ -243,5 +244,47 @@ def test_success_notifies_once_for_the_room_after_the_transaction_ends(api, stor
 
     notify.assert_called_once_with(room_id)
     assert notify.open_during_call == [0]
+
+
+# --- Daily post cap (#210) -------------------------------------------------------
+
+
+def make_post(room_id, created_at, **overrides):
+    fields = {
+        "id": str(uuid.uuid4()),
+        "room_id": room_id,
+        "type": "post",
+        "actor_name": "Ann",
+        "device_id": "device-2",
+        "room_plant_id": None,
+        "text": "Hello",
+        "photo_url": None,
+        "undo_payload": None,
+        "undone_at": None,
+        "created_at": created_at,
+    }
+    return FeedEvent(**{**fields, **overrides})
+
+
+def test_201st_post_in_a_room_within_24_hours_gives_429_and_writes_nothing(api, store, notify):
+    now = timestamps.now()
+    room = Room(id=str(uuid.uuid4()), name="Busy", description="", region="", created_at=now, last_activity_at=now)
+    store.save_room(room)
+    store.save_feed_event(make_post(room.id, now - timedelta(hours=23), undone_at=now))  # undone posts count
+    for _ in range(198):
+        store.save_feed_event(make_post(room.id, now - timedelta(minutes=1)))
+    store.save_feed_event(make_post(room.id, now - timedelta(hours=25)))  # outside the window
+    store.save_feed_event(make_post(room.id, now, type="care_done"))  # not a post
+    assert post(api, room.id, {"text": "200th"}).status_code == 201
+    feed_before = store.list_feed_events(room.id)
+
+    response = post(api, room.id, {"text": "201st"})
+
+    assert response.status_code == 429
+    retry_after = int(response.headers["Retry-After"])
+    assert 3500 < retry_after <= 3600  # until the oldest post in the window is 24 hours old
+    assert response.json() == {"message": f"You're going a bit fast. Try again in {retry_after} seconds."}
+    assert store.list_feed_events(room.id) == feed_before
+    notify.assert_called_once()  # only for the 200th
 
 

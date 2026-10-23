@@ -1,5 +1,6 @@
 import threading
 
+from conftest import TEST_DATABASE_URL, requires_postgres
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -13,7 +14,6 @@ from app.test_store import (
     make_room,
     make_room_plant,
 )
-from conftest import TEST_DATABASE_URL, requires_postgres
 
 # Behaviour shared by every store lives in test_store.py; these cover what the SQL store adds.
 

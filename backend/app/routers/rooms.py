@@ -9,7 +9,14 @@ from pydantic import BaseModel
 from app import live, timestamps
 from app.body import JsonBody
 from app.errors import ApiError
-from app.models import Room, RoomArea, RoomState, RoomSummary, RoomSummaryPlant
+from app.models import (
+    FeedPage,
+    Room,
+    RoomArea,
+    RoomState,
+    RoomSummary,
+    RoomSummaryPlant,
+)
 from app.rate_limit import CREATE_ROOM, DELETE_ROOM, rate_limited
 from app.store import StoreProtocol, get_store
 from app.text import INVALID_CHARACTERS_MESSAGE, has_invalid_characters
@@ -72,9 +79,9 @@ def _parse_cursor(before: str) -> tuple[str, str, str]:
     return (parts[0], parts[1], parts[2])
 
 
-def _parse_limit(limit: str | None) -> int:
+def _parse_limit(limit: str | None, default: int = DEFAULT_PAGE_SIZE) -> int:
     if limit is None:
-        return DEFAULT_PAGE_SIZE
+        return default
     if not limit.isdigit() or not 1 <= int(limit) <= MAX_PAGE_SIZE:
         raise ApiError(400, LIMIT_MESSAGE)
     return int(limit)
@@ -142,12 +149,42 @@ def get_room_state(room_id: str, store: Annotated[StoreProtocol, Depends(get_sto
     if room is None:
         raise ApiError(404, ROOM_NOT_FOUND_MESSAGE)
     plants = [rp for rp in store.list_room_plants(room.id) if store.get_plant(rp.plant_id) is not None]
+    feed = _feed_page(store, room.id, None, FEED_PAGE_SIZE)
     return RoomState(
         room=room,
         plants=plants,
         areas=store.list_areas(room.id),
-        feed=store.list_feed_events(room.id),
+        feed=feed.events,
+        feed_next=feed.next,
     )
+
+
+FEED_PAGE_SIZE = 50  # events in the room state, and the default page of getRoomFeed
+
+
+def _feed_page(store: StoreProtocol, room_id: str, before: str | None, size: int) -> FeedPage:
+    """One page of the feed, newest first. The cursor is the id of the last event on the page before."""
+    events = store.list_feed_page(room_id, before, size + 1)
+    page = events[:size]
+    return FeedPage(events=page, next=page[-1].id if len(events) > size else None)
+
+
+@router.get("/rooms/{room_id}/feed", operation_id="getRoomFeed")
+def get_room_feed(
+    room_id: str,
+    store: Annotated[StoreProtocol, Depends(get_store)],
+    limit: str | None = None,
+    before: str | None = None,
+) -> FeedPage:
+    """Older feed events, continuing after ``before`` (a ``feed_next`` or ``next``). One page per query."""
+    size = _parse_limit(limit, FEED_PAGE_SIZE)
+    if store.get_room(room_id) is None:
+        raise ApiError(404, ROOM_NOT_FOUND_MESSAGE)
+    if before is not None:
+        anchor = store.get_feed_event(before)
+        if anchor is None or anchor.room_id != room_id:
+            raise ApiError(400, CURSOR_MESSAGE)
+    return _feed_page(store, room_id, before, size)
 
 
 @router.delete("/rooms/{room_id}", operation_id="deleteRoom", status_code=204, dependencies=[rate_limited(DELETE_ROOM)])
