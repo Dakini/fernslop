@@ -253,6 +253,8 @@ paths:
         Sends the photo to a third-party plant ID API using a server-side key, then maps the
         results to rows in the plant reference table. Returns up to 3 candidates, highest
         confidence first. The user picks one before anything is added to a room.
+
+        Limited to 20 calls an hour and 20 a day per client IP (`429`, see `TooManyRequests`).
       requestBody:
         required: true
         content:
@@ -660,6 +662,9 @@ paths:
         fill the server's disk. Parallel uploads may overshoot the limit by a few photos.
         Unposted photos are deleted after 6 hours (`python -m app.photo_cleanup`), which
         frees space again. The mock never reports full.
+
+        Limited to 30 uploads an hour and 15 a day per client IP (`429`, see
+        `TooManyRequests`). The mock never limits.
       requestBody:
         required: true
         content:
@@ -1043,8 +1048,10 @@ components:
       description: |
         Too many writes from this client IP (an IPv6 client counts by its /64). Checked before
         the body is read, and nothing is written. Each limit has its own bucket, per IP:
-        createRoom 10/hour, deleteRoom 10/hour, uploadPhoto 30/hour, identifyPlant 20/hour,
-        followRoom 10/hour, every other write 120/minute (the server can change these).
+        createRoom 10/hour, deleteRoom 10/hour, uploadPhoto 30/hour and 15/day,
+        identifyPlant 20/hour and 20/day, followRoom 10/hour, every other write 120/minute
+        (the server can change these). uploadPhoto and identifyPlant check the hourly limit
+        first, so a call it rejects does not count against the daily one.
         Message is `You're going a bit fast. Try again in N seconds.`
       headers:
         Retry-After:

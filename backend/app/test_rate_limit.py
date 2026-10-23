@@ -76,6 +76,33 @@ def test_photo_limit_does_not_block_other_writes_or_other_ips(client, limits):
     assert other_ip.status_code == 201
 
 
+# --- Daily photo limit (#223) ------------------------------------------------------
+
+
+def test_upload_over_the_daily_limit_is_429_with_a_retry_after_of_about_a_day(client, limits):
+    limits(upload_photo_daily="2/day")
+    upload_photo(client)
+    upload_photo(client)
+
+    response = upload_photo(client)
+
+    assert response.status_code == 429
+    retry_after = int(response.headers["retry-after"])
+    assert 86300 < retry_after <= 86400
+    assert response.json()["message"] == f"You're going a bit fast. Try again in {retry_after} seconds."
+
+
+def test_the_env_flag_turns_the_daily_upload_limit_off(client, limits, monkeypatch):
+    monkeypatch.setenv(rate_limit.DISABLE_ENV, "off")
+    limits(upload_photo_daily="2/day")
+    upload_photo(client)
+    upload_photo(client)
+
+    response = upload_photo(client)
+
+    assert response.status_code == 201
+
+
 # --- Who the client is ------------------------------------------------------------
 
 
