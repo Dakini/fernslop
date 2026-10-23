@@ -13,7 +13,7 @@ from app.identify import (
     get_identify_provider,
 )
 from app.models import IdentifyCandidate, Plant
-from app.rate_limit import IDENTIFY, rate_limited, read_upload_file
+from app.rate_limit import IDENTIFY, IDENTIFY_DAILY, rate_limited, read_upload_file
 from app.store import StoreProtocol, get_store
 from app.uploads import read_image_upload
 
@@ -42,7 +42,11 @@ def search_plants(store: Annotated[StoreProtocol, Depends(get_store)], q: str = 
     return list(islice(matches, DEFAULT_SEARCH_LIMIT))
 
 
-@router.post("/plants/identify", operation_id="identifyPlant", dependencies=[rate_limited(IDENTIFY)])
+@router.post(
+    "/plants/identify",
+    operation_id="identifyPlant",
+    dependencies=[rate_limited(IDENTIFY), rate_limited(IDENTIFY_DAILY)],
+)
 def identify_plant(
     file: Annotated[UploadFile, Depends(read_upload_file)],
     provider: Annotated[IdentifyProvider, Depends(get_identify_provider)],

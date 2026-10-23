@@ -13,10 +13,15 @@ Buckets and their defaults (count per period, per client IP; an IPv6 client is k
 
 - ``create_room``  10/hour    ``FERNSLOP_RATE_LIMIT_CREATE_ROOM``
 - ``delete_room``  10/hour    ``FERNSLOP_RATE_LIMIT_DELETE_ROOM``
-- ``upload_photo`` 30/hour    ``FERNSLOP_RATE_LIMIT_UPLOAD_PHOTO``
-- ``identify``     20/hour    ``FERNSLOP_RATE_LIMIT_IDENTIFY``
+- ``upload_photo``       30/hour ``FERNSLOP_RATE_LIMIT_UPLOAD_PHOTO``
+- ``upload_photo_daily`` 15/day  ``FERNSLOP_RATE_LIMIT_UPLOAD_PHOTO_DAILY``
+- ``identify``           20/hour ``FERNSLOP_RATE_LIMIT_IDENTIFY``
+- ``identify_daily``     20/day  ``FERNSLOP_RATE_LIMIT_IDENTIFY_DAILY``
 - ``follow``       10/hour    ``FERNSLOP_RATE_LIMIT_FOLLOW``
 - ``write``        120/minute ``FERNSLOP_RATE_LIMIT_WRITE`` (plants, care, areas, posts, undo, unfollow)
+
+Photo uploads and identify each have an hourly and a daily bucket (#223). The route lists the
+hourly one first, so a call it rejects does not count against the daily one.
 
 ``FERNSLOP_RATE_LIMIT=off`` turns every limit off. Settings are read when the limiter is
 (re)built: at start-up and on ``reset()``.
@@ -50,7 +55,9 @@ DISABLE_ENV = "FERNSLOP_RATE_LIMIT"
 CREATE_ROOM = "create_room"
 DELETE_ROOM = "delete_room"
 UPLOAD_PHOTO = "upload_photo"
+UPLOAD_PHOTO_DAILY = "upload_photo_daily"
 IDENTIFY = "identify"
+IDENTIFY_DAILY = "identify_daily"
 FOLLOW = "follow"
 WRITE = "write"
 
@@ -58,7 +65,9 @@ DEFAULT_LIMITS = {
     CREATE_ROOM: "10/hour",
     DELETE_ROOM: "10/hour",
     UPLOAD_PHOTO: "30/hour",
+    UPLOAD_PHOTO_DAILY: "15/day",
     IDENTIFY: "20/hour",
+    IDENTIFY_DAILY: "20/day",
     FOLLOW: "10/hour",
     WRITE: "120/minute",
 }

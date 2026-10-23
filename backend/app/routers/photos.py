@@ -9,7 +9,12 @@ from fastapi import APIRouter, Depends, Response, UploadFile
 from app import timestamps
 from app.errors import ApiError
 from app.models import Photo, StoredPhoto
-from app.rate_limit import UPLOAD_PHOTO, rate_limited, read_upload_file
+from app.rate_limit import (
+    UPLOAD_PHOTO,
+    UPLOAD_PHOTO_DAILY,
+    rate_limited,
+    read_upload_file,
+)
 from app.store import StoreProtocol, get_store
 from app.uploads import read_image_upload, strip_metadata
 
@@ -32,7 +37,12 @@ def _is_uuid(value: str) -> bool:
     return True
 
 
-@router.post("/photos", operation_id="uploadPhoto", status_code=201, dependencies=[rate_limited(UPLOAD_PHOTO)])
+@router.post(
+    "/photos",
+    operation_id="uploadPhoto",
+    status_code=201,
+    dependencies=[rate_limited(UPLOAD_PHOTO), rate_limited(UPLOAD_PHOTO_DAILY)],
+)
 def upload_photo(
     file: Annotated[UploadFile, Depends(read_upload_file)],
     store: Annotated[StoreProtocol, Depends(get_store)],
