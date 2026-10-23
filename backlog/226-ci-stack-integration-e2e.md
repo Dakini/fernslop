@@ -46,3 +46,21 @@ Local verification (macOS, Docker Desktop), with no push:
 - Teardown: `down --volumes --remove-orphans` removed the containers, `fernslop-ci_pgdata` and the network. The user's `fernslop` project and its volumes were not touched
 
 No GitHub Actions run happened, because nothing was pushed. That leaves `--with-deps` on ubuntu-latest, the default port 8000 and the artifact upload unconfirmed until the first run.
+
+## QA: PASS
+
+Reviewed `git diff main...HEAD`. Only `.github/workflows/ci.yaml`, the new `.github/ci/compose.ci.yaml` and this issue file changed.
+
+- [x] `stack` has `needs: [backend, frontend]`, `timeout-minutes: 30`, no `continue-on-error`, no `permissions`. Checkout uses `persist-credentials: false`. `actions/upload-artifact@cf430e0... # v7.0.2` matches `gh api repos/actions/upload-artifact/commits/v7.0.2 --jq .sha`. Checkout and setup-uv reuse #225's pins - PASS
+- [x] The override only adds `127.0.0.1:55432:5432` to `db`, and the job runs the exact `up -d --build --wait` command. `docker-compose.yaml` is unchanged, so `make up` behaves as before - PASS
+- [x] Health: 30 tries x 2s with `--max-time 2`, needs 200 plus `jq -e '.status == "ok"'`. Against the real stack it got `{"status":"ok"}` after one reset connection. I ran the same loop against a dead port: it exited 1 and printed the last status (000) and the body - PASS
+- [x] Backend on Postgres: `createdb` via `exec -T db`, the same setup-uv settings as `backend`, `uv sync --locked`, then `uv run pytest` against `.../fernslop_test`. A grep on "N skipped" fails the step, and the default bash pipefail catches a pytest failure behind `tee`. My run: 185 passed, 0 skipped. The app's `fernslop` db still had 8 tables afterwards - PASS
+- [x] E2E: `uv sync --locked`, `playwright install --with-deps chromium`, `uv run pytest` with `E2E_BASE_URL=http://localhost:8000`. My run (with `E2E_BASE_URL` on 8001, without `--with-deps` on macOS): 5 passed across all 3 files - PASS
+- [x] `if: failure()` writes the logs to `stack-logs.txt` and uploads them as `stack-logs`. `if: always()` runs `down --volumes --remove-orphans` - PASS
+- [x] actionlint (Docker, `-color`) printed nothing and exited 0. Engineer comment has the counts and says no GitHub run happened - PASS
+
+Tests: `run-stack.sh` with `-p fernslop-ci` and `APP_PORT=8001`. Compose up healthy, health OK, backend on Postgres 185 passed and 0 skipped, e2e 5 passed. Teardown removed `fernslop-ci` containers, `fernslop-ci_pgdata` and the network. The user's `fernslop` project and volumes were untouched.
+
+Not verified (needs a real GitHub run): `--with-deps` on ubuntu-latest, port 8000 inside CI, and the artifact upload on failure.
+
+PASS
