@@ -40,3 +40,30 @@ Changed `infra/README.md` (new section "One-time: cut over to prod", before "Dat
 - **Choices to note:** the presign uses the regional S3 endpoint, since the global one redirects for new buckets and `curl -T` does not follow redirects. Prod's Caddy is stopped after the stack boots and started at the DNS switch, so it does not burn Let's Encrypt's failed-validation limit while the name still points at dev. The housekeeping timers are stopped on dev during the freeze and on prod during the restore, because they run one-off app containers that could change row counts. Dev's new domain is set by recreating `caddy` and `app` (a restart does not re-read env files), after the files are edited, so dev's `app` never runs under the live name.
 - **Reading of the last criterion:** "Dev's `app` must never start while the live domain still points at it" reads as: dev's `app` stays stopped from the freeze until its files name the dev domain (step 9) or until a rollback has pointed DNS back. The README states that rule in these terms.
 - **Not met / not testable by me:** the operator steps themselves (Cloudflare, SSM sessions, the change set) were not run, as instructed. The `dev` instance's older layout is unknown, so step 9 greps for the live name instead of assuming `caddy.env` and `app.env`, and step 3 says what to do if the database user or name differs. Existing README links to `../backlog/235-...`, `236-...` and `238-...` (done issues) were already broken and were left alone.
+
+## QA: PASS
+
+- [x] Start: #234/#235/#236 linked not copied, `TAG` read from dev's `/api/health`, `deploy.sh prod --names` checked, then `DOMAIN=... deploy.sh prod "$TAG"`; says the health wait will fail until DNS and gives an SSM `get /api/health` check; `production` values link to #236 step 5 - PASS
+      (`deploy.sh prod --names` prints `prod-fernslop` / `prod-fernslop-deploy`; the "Waiting for" and "Not reporting ... after 10 minutes" texts in the README match `deploy.sh`.)
+- [x] Freeze and dump on dev: do-not-push/promote rule stated (CI `docker compose up -d` would start `app`), `app` stopped before `pg_dump -Fc` in `db`, `umask 077` into `/root`, `pg_restore --list` check, no dev backup bucket used - PASS
+- [x] Transfer via prod's backup bucket: 15-minute presigned PUT made with `uvx --from boto3` (explains `aws s3 presign` is GET only), `curl -T` to `db/cutover-<timestamp>.dump`, GET link for prod in step 5, step 10 deletes the dev file, bucket object, local copies - PASS
+      (The bucket policy only denies non-TLS and encryption is the default SSE-S3, so a plain presigned PUT works. I did not re-run the presign snippet; the engineer's comment says it ran with fake credentials.)
+- [x] Restore with the linked restore steps, then per-table counts compared with `infra/table-counts.sh` and a garden with a photo opened - PASS
+- [x] DNS: grey cloud A record to prod's Elastic IP, Caddy started after the name resolves, `/api/health` check; prod backup run and checked with `pg_restore --list` (step 8); first promote only after that and after one `deploy-dev` (`deployed-dev`), with #238/#239 linked - PASS
+- [x] Move dev: `dev-fernslop` A record, files found by `grep` then edited, containers recreated, `DomainName` change set reviewed with a stop on `Replacement: True` (also on `Conditional` or `Remove`), `Url` and health checked, `development` `PUBLIC_URL` updated - PASS
+      (The 10 parameters in the change set match `ec2-stack.yaml`'s parameters, apart from the Elastic IP setting being added elsewhere. `UserData` is the only template use of `DomainName` besides the `Url` output.)
+- [x] Rollback written at each step - PASS. Every step has Undo. Before step 7: restart dev's `app`, nothing lost. After: undo step 9 in reverse, then move DNS back, then start dev's `app`, and warn that prod's writes since the switch are lost (with an optional `pg_dump` first). Dev's `app` is never started while the live domain points at it (step 9c starts it only after its files name the dev domain).
+
+Order and data safety (read step by step): the dump is taken with `app` and the timers stopped, checked, and put in S3 and size-checked (step 4) before anything is written to prod (step 5). Prod holds no live data and has no cert or traffic until step 7, so steps 1 to 6 can be redone or abandoned with no loss. The only step that loses writes is the rollback after step 7, and it says so.
+
+Constraints: only `infra/README.md` and `infra/table-counts.sh` changed for this (plus one sentence in #236's step 5 linking to the cutover). No template change.
+
+Commands run (all local or read-only; nothing against AWS):
+- `bash -n infra/table-counts.sh` - ok
+- `uvx --from shellcheck-py shellcheck infra/table-counts.sh` - clean
+- `bash infra/table-counts.sh` with no argument, `stage`, `dev x`, and `APP_PREFIX=Bad_X ... dev` - each refused with a clear message and exit 1
+- `infra/deploy.sh prod --names` and `infra/deploy.sh dev --names` - names as the runbook says
+- A script that checks every `#anchor` and `../backlog/...` link in the new "One-time: cut over to prod" section - all resolve (14 of 14)
+- Read the runbook against `infra/deploy.sh` and `infra/ec2-stack.yaml` (parameters, bucket policy and lifecycle, `SITE_ADDRESS` / `FERNSLOP_PUBLIC_URL` files, timer names, "bootstrap complete" line)
+
+Tests: no test suite applies (README and a shell script only); the commands above are the checks.
