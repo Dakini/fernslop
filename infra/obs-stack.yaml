@@ -202,11 +202,14 @@ Resources:
                   umask 077
                   { echo "OBS_DOMAIN=${DomainName}"; echo "OTLP_TOKEN=$(param /${AppPrefix}/otlp-token)"; } > caddy.env
                   # Grafana only reads the admin password when it first creates its database
-                  { echo "GF_SECURITY_ADMIN_PASSWORD=$(param /${AppPrefix}/grafana-admin-password)"; echo "GF_SERVER_ROOT_URL=https://${DomainName}"; } > grafana.env
+                  echo "GF_SECURITY_ADMIN_PASSWORD=$(param /${AppPrefix}/grafana-admin-password)" > grafana.env
+                  # Read by docker compose itself, for ${!GRAFANA_ROOT_URL} in docker-compose.yaml
+                  echo "GRAFANA_ROOT_URL=https://${DomainName}" > compose.env
                   cd observability
-                  docker compose -f docker-compose.yaml -f docker-compose.server.yaml up -d --remove-orphans --wait
+                  COMPOSE="docker compose --env-file /opt/obs/compose.env -f docker-compose.yaml -f docker-compose.server.yaml"
+                  $COMPOSE up -d --remove-orphans --wait
                   # Config files are bind-mounted, so a changed one needs a restart, not just up
-                  docker compose -f docker-compose.yaml -f docker-compose.server.yaml restart
+                  $COMPOSE restart
                   docker image prune -f
 
   ElasticIpAssociation:

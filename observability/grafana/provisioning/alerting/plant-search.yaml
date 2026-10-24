@@ -1,0 +1,63 @@
+# Grafana-managed alert rules, loaded at start-up like the dashboards. No contact point is set up yet, so they
+# show under Alerting -> Alert rules and are not sent anywhere.
+# Grafana expands environment variables in the labels of a provisioned rule but not in its annotations, so a
+# template's $ is written $$ in labels and $ in annotations. externalURL is GF_SERVER_ROOT_URL.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: plant-search
+    folder: Fernslop
+    interval: 5m
+    rules:
+      # A miss is counted once the person settles on a term (they stop typing, press Enter, switch to Photo or
+      # close the dialog) and at most once per opening of the dialog, so 5 in an hour for one term is several
+      # people, or one person several times, looking for a plant the table does not have. Held for 10 minutes so
+      # a burst that is already fading does not page anyone.
+      - uid: plant-search-repeated-miss
+        title: Plant search term keeps finding nothing
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: { from: 3600, to: 0 }
+            datasourceUid: loki
+            model:
+              refId: A
+              queryType: instant
+              expr: >-
+                sum by (search_term, service_name, deployment_environment_name, service_version) (
+                count_over_time({service_name="fernslop-backend"} | scope_name="fernslop.search" | search_term!="" [1h]))
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: A
+              conditions:
+                - evaluator: { type: gt, params: [4] }
+        for: 10m
+        # Most hours have no misses at all, which is fine
+        noDataState: OK
+        execErrState: Error
+        labels:
+          owner: product
+          severity: warning
+          service: "{{ $$labels.service_name }}"
+          environment: "{{ $$labels.deployment_environment_name }}"
+          version: "{{ $$labels.service_version }}"
+        annotations:
+          summary: >-
+            "{{ $labels.search_term }}" found no plants {{ $values.A.Value }} times in the last hour
+            ({{ $labels.deployment_environment_name }})
+          description: >-
+            People keep searching the Add a plant dialog for "{{ $labels.search_term }}" and the plant table has
+            nothing matching it. Service {{ $labels.service_name }}, environment
+            {{ $labels.deployment_environment_name }}, version {{ $labels.service_version }}. Owner: product.
+          runbook: >-
+            If it is a real plant, add it to the plant reference table (_PLANTS in backend/app/seed.py), or add
+            the name people use to an existing plant so the search finds it. If it is a typo of a plant we have,
+            or noise, silence this term for a week in Grafana (Alerting -> Silences, search_term=<term>).
+          dashboard_url: >-
+            {{ externalURL }}/d/fernslop-app/fernslop-app-metrics?var-environment={{ $labels.deployment_environment_name }}&var-version={{ $labels.service_version }}&from=now-6h&to=now
+          __dashboardUid__: fernslop-app
+          __panelId__: "10"
