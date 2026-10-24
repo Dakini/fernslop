@@ -1,0 +1,4 @@
+# [otel] Infra: pass the environment name (dev/prod) to the running app container
+**What:** Set `FERNSLOP_ENVIRONMENT=<dev|prod>` for the app container from the stack's `Environment` parameter (`infra/ec2-stack.yaml`, where `app.env` is written), and document it in `infra/README.md`.
+**Why:** [#243](243-otel-backend-sdk-and-resource.md) reports the environment, but today the container only learns its version (baked into the image by [#235](done/235-env-build-and-deploy-by-tag.md)), never dev or prod.
+**Edge cases:** UserData does not re-run on the live dev and prod instances, so they need a one-time step (README runbook or the deploy document) the user runs; keep the image environment-neutral (one image is promoted dev to prod, [#239](done/239-env-ci-promote-to-prod.md)); unset locally means `local`.
