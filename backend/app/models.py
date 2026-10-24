@@ -122,6 +122,12 @@ def _check_area_label(value: str) -> str:
     return label
 
 
+class SearchMissInput(ApiModel):
+    """Request body of ``recordSearchMiss``. Unknown fields are ignored."""
+
+    q: Annotated[str, Field(strict=True, max_length=200)]
+
+
 class AreaInput(ApiModel):
     """Request body of ``addArea``. Unknown fields are ignored."""
 

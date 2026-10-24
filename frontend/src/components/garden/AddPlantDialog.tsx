@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Camera, Loader2, Search } from "lucide-react";
 import { toast } from "sonner";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -16,18 +16,53 @@ export function AddPlantDialog({ open, onOpenChange, onPick }: { open: boolean; 
   const [tab, setTab] = useState("search");
   const [q, setQ] = useState("");
   const [results, setResults] = useState<Plant[]>([]);
+  // The query `results` are for: they lag behind `q` while a search is in flight
+  const [resultsFor, setResultsFor] = useState("");
+  // Misses already reported since the dialog opened, so Enter then close counts a term once
+  const reported = useRef(new Set<string>());
   const [busy, setBusy] = useState(false);
   const [candidates, setCandidates] = useState<IdentifyCandidate[] | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
+    if (open) reported.current = new Set();
+  }, [open]);
+
+  useEffect(() => {
     if (!open) return;
     let live = true;
-    getServices().searchPlants(q).then((r) => live && setResults(r));
+    getServices()
+      .searchPlants(q)
+      .then((r) => {
+        if (!live) return;
+        setResults(r);
+        setResultsFor(q);
+      });
     return () => {
       live = false;
     };
   }, [q, open]);
+
+  // Only a term the person settled on counts, not each keystroke on the way to it
+  function reportMiss() {
+    const term = q.trim().toLowerCase();
+    if (!term || tab !== "search" || resultsFor !== q || results.length || reported.current.has(term)) return;
+    reported.current.add(term);
+    void getServices().recordSearchMiss(q);
+  }
+
+  function onTabChange(next: string) {
+    if (next !== "search") {
+      reportMiss();
+      setNotice(null);
+    }
+    setTab(next);
+  }
+
+  function onDialogOpenChange(next: boolean) {
+    if (!next) reportMiss();
+    onOpenChange(next);
+  }
 
   async function onFile(file: File | undefined) {
     if (!file) return;
@@ -62,21 +97,21 @@ export function AddPlantDialog({ open, onOpenChange, onPick }: { open: boolean; 
   );
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={onDialogOpenChange}>
       <DialogContent className="rounded-3xl bg-oat sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="font-display text-moss">Add a plant</DialogTitle>
           <DialogDescription>Search our plant table or snap a photo.</DialogDescription>
         </DialogHeader>
         {notice && <p role="status" className="rounded-2xl bg-clay/50 px-3 py-2 text-sm text-accent-foreground">{notice}</p>}
-        <Tabs value={tab} onValueChange={setTab}>
+        <Tabs value={tab} onValueChange={onTabChange}>
           <TabsList className="grid w-full grid-cols-2 rounded-full">
             <TabsTrigger value="search" className="rounded-full"><Search className="h-4 w-4" /> Search</TabsTrigger>
             <TabsTrigger value="photo" className="rounded-full"><Camera className="h-4 w-4" /> Photo</TabsTrigger>
           </TabsList>
           <TabsContent value="search" className="space-y-3">
             <Label htmlFor="plant-q" className="sr-only">Plant name</Label>
-            <Input id="plant-q" autoFocus placeholder="Basil, Rosa, tomato…" value={q} onChange={(e) => setQ(e.target.value)} className="rounded-full bg-cream" />
+            <Input id="plant-q" autoFocus placeholder="Basil, Rosa, tomato…" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === "Enter" && reportMiss()} className="rounded-full bg-cream" />
             <ul className="max-h-80 space-y-2 overflow-y-auto">
               {results.map((p) => row(p))}
               {!results.length && <li className="py-6 text-center text-sm text-muted-foreground">No plants match “{q}”.</li>}

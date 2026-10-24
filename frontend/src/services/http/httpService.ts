@@ -157,6 +157,10 @@ export function createHttpService(
     listPlants: () => json("/plants"),
     searchPlants: (query) =>
       json(`/plants/search?q=${encodeURIComponent(query)}`),
+    async recordSearchMiss(query) {
+      // keepalive: often sent as the dialog closes. No toast on failure; it is only telemetry.
+      await send("/plants/search/misses", { ...body("POST", { q: query }), keepalive: true }).catch(() => undefined);
+    },
     identifyPlant: (file) => json("/plants/identify", upload(file), true),
 
     addPlant: (roomId, plantId, actor) =>

@@ -243,6 +243,30 @@ paths:
                 type: array
                 items: { $ref: "#/components/schemas/Plant" }
 
+  /plants/search/misses:
+    post:
+      tags: [Plants]
+      operationId: recordSearchMiss
+      x-service-method: recordSearchMiss
+      summary: Report a plant search that found nothing
+      description: |
+        `searchPlants` runs on every keystroke, so it records nothing. The frontend calls this once the person
+        settles on a term: Enter, switching to the Photo tab, or closing the dialog. The server runs the same
+        search again and only counts the term (`fernslop.plant_search.empty`, and a log line with the term,
+        lower-cased and trimmed) if it really finds nothing. Always `204`, whether or not it counted.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SearchMissInput" }
+      responses:
+        "204":
+          description: Received
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
   /plants/identify:
     post:
       tags: [Plants]
@@ -1175,6 +1199,11 @@ components:
         deleted_at:
           oneOf: [{ $ref: "#/components/schemas/Timestamp" }, { type: "null" }]
 
+    SearchMissInput:
+      type: object
+      required: [q]
+      properties:
+        q: { type: string, maxLength: 200, description: "The search box's text, as sent to `searchPlants`" }
     AreaInput:
       type: object
       required: [label, shape, x_pct, y_pct, w_pct, h_pct, colour]

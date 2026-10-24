@@ -135,7 +135,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(increase(fernslop_gardens_created_total{deployment_environment_name=~\"$environment\", service_version=~\"$version\"}[$__range]))",
+          "expr": "sum((max_over_time(fernslop_gardens_created_total{deployment_environment_name=~\"$environment\", service_version=~\"$version\"}[$__range]) - (fernslop_gardens_created_total{deployment_environment_name=~\"$environment\", service_version=~\"$version\"} offset $__range)) or max_over_time(fernslop_gardens_created_total{deployment_environment_name=~\"$environment\", service_version=~\"$version\"}[$__range])) or vector(0)",
           "legendFormat": "",
           "instant": true,
           "range": false
@@ -313,7 +313,7 @@
       "id": 6,
       "type": "timeseries",
       "title": "Gardens created",
-      "description": "Gardens created per interval",
+      "description": "Gardens created per bar (at least a minute)",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -331,7 +331,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (deployment_environment_name, service_version) (increase(fernslop_gardens_created_total{deployment_environment_name=~\"$environment\", service_version=~\"$version\"}[$__rate_interval]))",
+          "expr": "sum by (deployment_environment_name, service_version) ((max_over_time(fernslop_gardens_created_total{deployment_environment_name=~\"$environment\", service_version=~\"$version\"}[$__interval]) - (fernslop_gardens_created_total{deployment_environment_name=~\"$environment\", service_version=~\"$version\"} offset $__interval)) or max_over_time(fernslop_gardens_created_total{deployment_environment_name=~\"$environment\", service_version=~\"$version\"}[$__interval]))",
           "legendFormat": "{{deployment_environment_name}} {{service_version}}"
         }
       ],
@@ -339,7 +339,12 @@
         "defaults": {
           "unit": "short",
           "decimals": 0,
-          "min": 0
+          "min": 0,
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "lineWidth": 1
+          }
         },
         "overrides": []
       },
@@ -351,13 +356,14 @@
         "tooltip": {
           "mode": "multi"
         }
-      }
+      },
+      "interval": "1m"
     },
     {
       "id": 7,
       "type": "timeseries",
       "title": "Garden plants created",
-      "description": "Plants added to a garden per interval",
+      "description": "Plants added to a garden per bar (at least a minute)",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -375,7 +381,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (deployment_environment_name, service_version) (increase(fernslop_garden_plants_created_total{deployment_environment_name=~\"$environment\", service_version=~\"$version\"}[$__rate_interval]))",
+          "expr": "sum by (deployment_environment_name, service_version) ((max_over_time(fernslop_garden_plants_created_total{deployment_environment_name=~\"$environment\", service_version=~\"$version\"}[$__interval]) - (fernslop_garden_plants_created_total{deployment_environment_name=~\"$environment\", service_version=~\"$version\"} offset $__interval)) or max_over_time(fernslop_garden_plants_created_total{deployment_environment_name=~\"$environment\", service_version=~\"$version\"}[$__interval]))",
           "legendFormat": "{{deployment_environment_name}} {{service_version}}"
         }
       ],
@@ -383,7 +389,12 @@
         "defaults": {
           "unit": "short",
           "decimals": 0,
-          "min": 0
+          "min": 0,
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "lineWidth": 1
+          }
         },
         "overrides": []
       },
@@ -395,7 +406,8 @@
         "tooltip": {
           "mode": "multi"
         }
-      }
+      },
+      "interval": "1m"
     },
     {
       "id": 8,
@@ -419,7 +431,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (deployment_environment_name, service_version, component, http_response_status_code) (increase(fernslop_component_creation_failures_total{deployment_environment_name=~\"$environment\", service_version=~\"$version\"}[$__rate_interval]))",
+          "expr": "sum by (deployment_environment_name, service_version, component, http_response_status_code) ((max_over_time(fernslop_component_creation_failures_total{deployment_environment_name=~\"$environment\", service_version=~\"$version\"}[$__interval]) - (fernslop_component_creation_failures_total{deployment_environment_name=~\"$environment\", service_version=~\"$version\"} offset $__interval)) or max_over_time(fernslop_component_creation_failures_total{deployment_environment_name=~\"$environment\", service_version=~\"$version\"}[$__interval]))",
           "legendFormat": "{{deployment_environment_name}} {{service_version}} {{component}} {{http_response_status_code}}"
         }
       ],
@@ -427,7 +439,12 @@
         "defaults": {
           "unit": "short",
           "decimals": 0,
-          "min": 0
+          "min": 0,
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "lineWidth": 1
+          }
         },
         "overrides": []
       },
@@ -439,13 +456,14 @@
         "tooltip": {
           "mode": "multi"
         }
-      }
+      },
+      "interval": "1m"
     },
     {
       "id": 9,
       "type": "timeseries",
       "title": "Plant searches with no results",
-      "description": "Searches with a query that found nothing, per interval",
+      "description": "Searches with a query that found nothing, per bar (at least a minute)",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -463,7 +481,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (deployment_environment_name, service_version) (increase(fernslop_plant_search_empty_total{deployment_environment_name=~\"$environment\", service_version=~\"$version\"}[$__rate_interval]))",
+          "expr": "sum by (deployment_environment_name, service_version) ((max_over_time(fernslop_plant_search_empty_total{deployment_environment_name=~\"$environment\", service_version=~\"$version\"}[$__interval]) - (fernslop_plant_search_empty_total{deployment_environment_name=~\"$environment\", service_version=~\"$version\"} offset $__interval)) or max_over_time(fernslop_plant_search_empty_total{deployment_environment_name=~\"$environment\", service_version=~\"$version\"}[$__interval]))",
           "legendFormat": "{{deployment_environment_name}} {{service_version}}"
         }
       ],
@@ -471,7 +489,12 @@
         "defaults": {
           "unit": "short",
           "decimals": 0,
-          "min": 0
+          "min": 0,
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "lineWidth": 1
+          }
         },
         "overrides": []
       },
@@ -483,7 +506,8 @@
         "tooltip": {
           "mode": "multi"
         }
-      }
+      },
+      "interval": "1m"
     },
     {
       "id": 10,
@@ -553,6 +577,108 @@
           }
         }
       ]
+    },
+    {
+      "id": 11,
+      "type": "stat",
+      "title": "Photos uploaded",
+      "description": "Photos uploaded for posts, in the selected time range",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 29
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum((max_over_time(fernslop_photos_uploaded_total{deployment_environment_name=~\"$environment\", service_version=~\"$version\"}[$__range]) - (fernslop_photos_uploaded_total{deployment_environment_name=~\"$environment\", service_version=~\"$version\"} offset $__range)) or max_over_time(fernslop_photos_uploaded_total{deployment_environment_name=~\"$environment\", service_version=~\"$version\"}[$__range])) or vector(0)",
+          "legendFormat": "",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "none",
+        "graphMode": "none",
+        "textMode": "value"
+      }
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Photos uploaded",
+      "description": "Photos uploaded for posts, per bar (at least a minute)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 18,
+        "x": 6,
+        "y": 29
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (deployment_environment_name, service_version) ((max_over_time(fernslop_photos_uploaded_total{deployment_environment_name=~\"$environment\", service_version=~\"$version\"}[$__interval]) - (fernslop_photos_uploaded_total{deployment_environment_name=~\"$environment\", service_version=~\"$version\"} offset $__interval)) or max_over_time(fernslop_photos_uploaded_total{deployment_environment_name=~\"$environment\", service_version=~\"$version\"}[$__interval]))",
+          "legendFormat": "{{deployment_environment_name}} {{service_version}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "min": 0,
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 80,
+            "lineWidth": 1
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "interval": "1m"
     }
   ]
 }

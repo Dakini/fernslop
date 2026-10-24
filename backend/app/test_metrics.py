@@ -4,6 +4,7 @@ from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
 from app import metrics, telemetry
 from app.main import create_app
+from app.test_photos import make_image
 
 ADA = {"x-device-id": "device-ada", "x-actor-name": "Ada"}
 BO = {"x-device-id": "device-bo", "x-actor-name": "Bo"}
@@ -66,20 +67,45 @@ def test_failed_plant_create_counts_a_failure_and_no_plant(client, reader):
     assert _points(reader, "fernslop.garden_plants.created")[0] == [({}, 0)]
 
 
-def test_only_plant_searches_that_find_nothing_are_counted(client, reader):
-    client.get("/api/plants/search", params={"q": "tomato"})
-    client.get("/api/plants/search", params={"q": "zzzz-not-a-plant"})
-
-    empty, _ = _points(reader, "fernslop.plant_search.empty")
-
-    assert empty == [({}, 1)]
+def _search_terms(caplog) -> list[str]:
+    return [getattr(record, "search.term") for record in caplog.records if record.name == "fernslop.search"]
 
 
-def test_empty_plant_search_logs_its_normalised_term(client, caplog):
-    client.get("/api/plants/search", params={"q": "  Purple Kale  "})
+def test_searching_alone_records_no_miss(client, reader, caplog):
+    # The search box searches on every keystroke
+    for q in ("z", "zz", "zzzz-not-a-plant"):
+        assert client.get("/api/plants/search", params={"q": q}).json() == []
 
-    terms = [getattr(record, "search.term") for record in caplog.records if record.name == "fernslop.search"]
-    assert terms == ["purple kale"]
+    assert _points(reader, "fernslop.plant_search.empty")[0] == [({}, 0)]
+    assert _search_terms(caplog) == []
+
+
+def test_reported_miss_is_counted_and_logs_its_normalised_term(client, reader, caplog):
+    response = client.post("/api/plants/search/misses", json={"q": "  Purple Kale  "})
+
+    assert response.status_code == 204
+    assert _points(reader, "fernslop.plant_search.empty")[0] == [({}, 1)]
+    assert _search_terms(caplog) == ["purple kale"]
+
+
+@pytest.mark.parametrize("q", ["tomato", "   "])
+def test_reported_miss_that_is_not_one_is_ignored(client, reader, caplog, q):
+    # A term that finds plants, or no term at all, is not a miss whatever the frontend says
+    assert client.post("/api/plants/search/misses", json={"q": q}).status_code == 204
+
+    assert _points(reader, "fernslop.plant_search.empty")[0] == [({}, 0)]
+    assert _search_terms(caplog) == []
+
+
+def test_reported_miss_needs_a_string(client):
+    assert client.post("/api/plants/search/misses", json={"q": 3}).status_code == 400
+
+
+def test_uploaded_photos_are_counted(client, reader):
+    response = client.post("/api/photos", files={"file": ("leaf.png", make_image("PNG"), "image/png")})
+
+    assert response.status_code == 201
+    assert _points(reader, "fernslop.photos.uploaded")[0] == [({}, 1)]
 
 
 def test_active_participants_counts_each_writing_device_once(client, reader):

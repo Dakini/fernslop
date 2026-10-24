@@ -383,6 +383,10 @@ export function createMockService(opts: MockOptions = {}): GardenService & { _db
       return wait(matches.slice(0, SEARCH_LIMIT));
     },
 
+    async recordSearchMiss() {
+      return wait(undefined);
+    },
+
     async identifyPlant(upload) {
       const file = await checkImage(upload);
       // Mock: deterministic pseudo-candidates from the file name/size.

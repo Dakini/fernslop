@@ -166,6 +166,11 @@ export interface GardenService {
   listPlants(): Promise<Plant[]>;
   /** At most 12 matches, in reference order. */
   searchPlants(query: string): Promise<Plant[]>;
+  /**
+   * The person settled on `query` (Enter, the Photo tab, closing the dialog) and it found nothing. Telemetry
+   * only: the server checks the term again, and failures are ignored.
+   */
+  recordSearchMiss(query: string): Promise<void>;
   identifyPlant(file: File): Promise<IdentifyCandidate[]>;
 
   addPlant(roomId: string, plantId: string, actor: Actor): Promise<RoomPlant>;

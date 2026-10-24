@@ -45,13 +45,17 @@ OTEL_TRACES_EXPORTER=otlp OTEL_METRICS_EXPORTER=otlp OTEL_LOGS_EXPORTER=otlp \
 Traces: Grafana → Explore → Tempo, search `service.name = fernslop-backend`.
 
 Metrics: the **Fernslop → Fernslop app metrics** dashboard shows gardens created, garden plants created,
-creation failures, active participants and plant searches with no results. It also shows how many distinct
+creation failures, photos uploaded, active participants and plant searches with no results. Counts are exact, not
+Prometheus's `increase()` estimate. Each app process is its own series (`service_instance_id`), so a panel takes its
+highest value in the range minus its value at the start. That still counts a process whose first export failed. It also shows how many distinct
 search terms found nothing, and a table of those terms. Filter it by **Environment** and **Deployed version**
 at the top. The metrics are defined in `backend/app/metrics.py` and exported every minute
 (`OTEL_METRIC_EXPORT_INTERVAL` in ms to change it). Every series has `deployment_environment_name` and
 `service_version` labels.
 
-Logs: only empty plant searches are sent, one log line each with the search term (lower-cased, trimmed, at most
+Logs: only empty plant searches are sent. The search box searches as you type, so a miss is only counted when the
+person settles on the term: Enter, switching to the Photo tab, or closing the dialog (`recordSearchMiss`). The
+server checks again that it finds nothing. One log line each, with the search term (lower-cased, trimmed, at most
 100 characters) as `search_term`. The term is in Loki rather than Prometheus, because one series per term
 would grow without limit. Grafana → Explore → Loki:
 `{service_name="fernslop-backend"} | scope_name="fernslop.search"`.

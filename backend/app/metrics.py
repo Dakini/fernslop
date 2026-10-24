@@ -6,7 +6,10 @@
   ``http.response.status_code`` (400 bad input, 404 missing room/plant, 409 garden full, 429 rate limited, 500)
 - ``fernslop.garden.participants.active``: distinct devices that changed any garden in the last 15 minutes
   (the frontend sends ``X-Device-Id`` on writes only, so people who only look are not counted)
-- ``fernslop.plant_search.empty``: plant searches with a query that found nothing. The query is not a metric
+- ``fernslop.photos.uploaded``: photos uploaded for posts (``uploadPhoto``; identify photos are not stored or counted)
+- ``fernslop.plant_search.empty``: plant searches the person settled on that found nothing, reported by the frontend
+  on Enter, on switching to the Photo tab or on closing the dialog (``recordSearchMiss``), not on every keystroke.
+  The query is not a metric
   label (user text would make one series per query); ``record_empty_search`` logs it instead, as ``search.term``
   on the ``fernslop.search`` logger, which telemetry.py exports as OpenTelemetry logs (Loki)
 
@@ -29,6 +32,7 @@ MAX_TRACKED_DEVICES = 10_000
 
 # operationId (openapi.yaml) of the create routes -> the component they create
 CREATE_OPERATIONS = {"createRoom": "garden", "addPlant": "plant", "addArea": "area"}
+UPLOAD_PHOTO_OPERATION = "uploadPhoto"
 WRITE_METHODS = {"POST", "PATCH", "DELETE"}
 SEARCH_TERM_MAX_LENGTH = 100
 
@@ -72,11 +76,19 @@ class AppMetrics:
             unit="{failure}",
             description="Failed creates of a garden, plant or area",
         )
+        self.photos_uploaded = meter.create_counter(
+            "fernslop.photos.uploaded", unit="{photo}", description="Photos uploaded for posts"
+        )
         self.empty_plant_searches = meter.create_counter(
             "fernslop.plant_search.empty", unit="{search}", description="Plant searches that found nothing"
         )
-        # Start each series at 0, so Prometheus sees the first garden, plant or empty search as an increase
-        for counter in (self.gardens_created, self.garden_plants_created, self.empty_plant_searches):
+        # Start each series at 0, so Prometheus sees the first garden, plant, photo or empty search as an increase
+        for counter in (
+            self.gardens_created,
+            self.garden_plants_created,
+            self.photos_uploaded,
+            self.empty_plant_searches,
+        ):
             counter.add(0)
         meter.create_observable_gauge(
             "fernslop.garden.participants.active",
@@ -120,7 +132,10 @@ def _record(scope: Scope, status: int) -> None:
     route = scope.get("route")
     method = scope["method"]
     metrics = current()
-    component = CREATE_OPERATIONS.get(getattr(route, "operation_id", None) or "")
+    operation_id = getattr(route, "operation_id", None) or ""
+    if operation_id == UPLOAD_PHOTO_OPERATION and status < 400:
+        metrics.photos_uploaded.add(1)
+    component = CREATE_OPERATIONS.get(operation_id)
     if component is not None:
         if status >= 400:
             metrics.creation_failures.add(
