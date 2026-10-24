@@ -94,15 +94,27 @@ aws cloudformation describe-stacks --stack-name fernslop --query "Stacks[0].Outp
 aws cloudformation describe-stacks --stack-name prod-fernslop --query "Stacks[0].Outputs" --output table
 ```
 
-Set these on each environment (`--env development` from `fernslop`, `--env production` from `prod-fernslop`):
+Dev, from the `fernslop` outputs:
 
 ```sh
 gh variable set INSTANCE_ID --env development --body <InstanceId>
-gh variable set DEPLOY_DOCUMENT --env development --body <DeployDocumentName>   # fernslop-deploy / prod-fernslop-deploy
+gh variable set DEPLOY_DOCUMENT --env development --body <DeployDocumentName>   # fernslop-deploy
 gh variable set PUBLIC_URL --env development --body <Url>                       # https://<domain>, no trailing slash
 ```
 
-Re-run the failed `deploy-dev` job. Done: every push to `main` deploys to dev, and "Promote to prod" (Actions tab, `promote.yaml`) deploys the image dev is running. Promote needs one successful `deploy-dev` first.
+Prod, from the `prod-fernslop` outputs:
+
+```sh
+gh variable set INSTANCE_ID --env production --body <InstanceId>
+gh variable set DEPLOY_DOCUMENT --env production --body <DeployDocumentName>    # prod-fernslop-deploy
+gh variable set PUBLIC_URL --env production --body <Url>                        # https://<domain>, no trailing slash
+```
+
+Re-run the failed `deploy-dev` job. Done: every push to `main` deploys to dev.
+
+## Promote to prod
+
+Prod only changes when you promote. Actions tab → "Promote to prod" (`promote.yaml`) → Run workflow, or `gh workflow run promote.yaml --ref main`. It deploys the image dev is running (the `deployed-dev` git tag), so it needs one successful `deploy-dev` first. The `production` environment's variables from steps 3 and 7 must be set.
 
 ## If you delete a server
 
