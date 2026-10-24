@@ -17,7 +17,6 @@ Parameters:
       prod-<AppPrefix>-deploy.
   GitHubRepo:
     Type: String
-    Default: Dakini/fernslop
     Description: owner/name of the repository whose workflows may assume the deploy roles
   CreateOidcProvider:
     Type: String

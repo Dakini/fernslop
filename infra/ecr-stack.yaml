@@ -13,7 +13,6 @@ Parameters:
     Description: Names the repository; infra/deploy.sh passes APP_PREFIX.
   GitHubRepo:
     Type: String
-    Default: Dakini/fernslop
     Description: owner/name of the repository whose main branch may push images
   ExistingOidcProviderArn:
     Type: String

@@ -17,6 +17,15 @@ STACK="$PREFIX-obs"
 cd "$(dirname "$0")/.."
 REGION=$(aws configure get region)
 
+default_network() { # sets VPC and SUBNET: the default VPC and its default subnet in <region>a
+  VPC=$(aws ec2 describe-vpcs --filters Name=is-default,Values=true --query "Vpcs[0].VpcId" --output text)
+  SUBNET=$(aws ec2 describe-subnets --filters Name=vpc-id,Values="$VPC" Name=default-for-az,Values=true \
+    Name=availability-zone,Values="${REGION}a" --query "Subnets[0].SubnetId" --output text)
+  if [ "$VPC" = None ] || [ "$SUBNET" = None ]; then
+    echo "No default VPC with a default subnet in ${REGION}a; create one with: aws ec2 create-default-vpc" >&2
+    exit 1
+  fi
+}
 stack_output() { # <key>
   local v
   v=$(aws cloudformation describe-stacks --stack-name "$STACK" \
@@ -56,9 +65,11 @@ else
     echo "First run: DOMAIN=<domain> EIP_ALLOCATION_ID=eipalloc-... infra/obs-deploy.sh" >&2
     exit 1
   fi
+  default_network
   aws cloudformation deploy --stack-name "$STACK" --template-file infra/obs-stack.yaml \
     --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset \
     --parameter-overrides AppPrefix="$PREFIX" DomainName="$DOMAIN" ExistingEipAllocationId="$EIP_ALLOCATION_ID" \
+      VpcId="$VPC" SubnetId="$SUBNET" \
     ${CFN_ROLE_ARN:+--role-arn "$CFN_ROLE_ARN"}
 fi
 INSTANCE=$(stack_output InstanceId)

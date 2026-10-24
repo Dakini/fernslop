@@ -16,12 +16,10 @@ Parameters:
       /<AppPrefix>/grafana-admin-password (created by infra/obs-deploy.sh).
   VpcId:
     Type: AWS::EC2::VPC::Id
-    Default: vpc-0123456789abcdef0
-    Description: Default VPC
+    Description: The account's default VPC (looked up by the deploy script on creation)
   SubnetId:
     Type: AWS::EC2::Subnet::Id
-    Default: subnet-0123456789abcdef0
-    Description: Default subnet (eu-west-2a)
+    Description: The default VPC's default subnet in <region>a (looked up by the deploy script on creation)
   InstanceType:
     Type: String
     Default: t4g.small
