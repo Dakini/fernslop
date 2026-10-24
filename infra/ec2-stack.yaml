@@ -77,6 +77,15 @@ Parameters:
     Description: >
       The address of ExistingEipAllocationId. CloudFormation cannot look it up from the id, and it is used for
       PUBLIC_URL, the Url output and the ElasticIp output. Ignored when ExistingEipAllocationId is empty.
+  OtlpEndpoint:
+    Type: String
+    Default: ""
+    AllowedPattern: "^(https://[a-z0-9.-]+)?$"
+    ConstraintDescription: empty, or https://<host> with no path or trailing slash
+    Description: >
+      Empty sends no telemetry. Otherwise the observability server (infra/obs-stack.yaml) the app sends traces,
+      metrics and logs to over OTLP HTTP, with the token in the SSM SecureString /<AppPrefix>/otlp-token.
+      Written to app.env by the deploy document. infra/deploy.sh passes OTLP_ENDPOINT.
 
 Rules:
   DomainRequired:
@@ -151,6 +160,10 @@ Resources:
               - Effect: Allow
                 Action: [logs:CreateLogStream, logs:PutLogEvents]
                 Resource: !GetAtt LogGroup.Arn
+              # The observability server's OTLP token (a SecureString under the AWS-managed aws/ssm key)
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AppPrefix}/otlp-token"
         - PolicyName: write-db-backups
           PolicyDocument:
             Version: "2012-10-17"
@@ -547,6 +560,21 @@ Resources:
                   # Servers created before FERNSLOP_ENVIRONMENT existed get it here; replace the line, keep the rest
                   touch app.env
                   { awk '!/^FERNSLOP_ENVIRONMENT=/' app.env; echo 'FERNSLOP_ENVIRONMENT=${Environment}'; } > app.env.new
+                  mv app.env.new app.env
+                  # Telemetry to the observability server when OtlpEndpoint is set; none otherwise. Rewritten every deploy.
+                  OTLP_ENDPOINT='${OtlpEndpoint}'
+                  {
+                    awk '!/^OTEL_/' app.env
+                    if [ -n "$OTLP_ENDPOINT" ]; then
+                      OTLP_TOKEN=$(aws ssm get-parameter --region ${AWS::Region} --with-decryption \
+                        --name /${AppPrefix}/otlp-token --query Parameter.Value --output text)
+                      echo 'OTEL_TRACES_EXPORTER=otlp'
+                      echo 'OTEL_METRICS_EXPORTER=otlp'
+                      echo 'OTEL_LOGS_EXPORTER=otlp'
+                      echo "OTEL_EXPORTER_OTLP_ENDPOINT=$OTLP_ENDPOINT"
+                      echo "OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer%20$OTLP_TOKEN"
+                    fi
+                  } > app.env.new
                   mv app.env.new app.env
                   docker compose up -d --pull always
                   docker image prune -f

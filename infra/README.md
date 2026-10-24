@@ -7,6 +7,7 @@ Fernslop runs on one EC2 instance (docker compose: `db`, `app`, `caddy`). Its Cl
 | `fernslop-github` | `github-oidc-stack.yaml` | GitHub OIDC login and the deploy roles CI uses |
 | `fernslop-ecr` | `ecr-stack.yaml` | the image repository and the role CI uses to push |
 | `fernslop` / `prod-fernslop` | `ec2-stack.yaml` | the dev and prod servers (made by `deploy.sh`) |
+| `fernslop-obs` | `obs-stack.yaml` | the observability server both send telemetry to (made by `obs-deploy.sh`, optional) |
 
 Prod is a second server stack, `prod-fernslop`. After setup, a push to `main` tests, builds, pushes and deploys to dev; prod is promoted by hand. You do not touch AWS again.
 
@@ -134,5 +135,65 @@ If the ECR repository was deleted by hand, stack updates fail with `repository .
 - `deploy-dev` waits until `/api/health` reports the new tag, smoke-tests `/` and `/api/plants`, then moves the `deployed-dev` git tag, which is what "Promote to prod" deploys. Nothing is rolled back on failure.
 - The deploy document also sets `FERNSLOP_ENVIRONMENT=<dev|prod>` in `/opt/app/app.env` from the stack's `Environment` parameter. The image itself is the same for dev and prod. The backend reports this, together with the image tag, on its OpenTelemetry traces (`backend/app/telemetry.py`).
 - A server created before `FERNSLOP_ENVIRONMENT` existed only gets it after one `infra/deploy.sh <env> <tag>` run, which updates the deploy document. CI deploys after that keep it set.
-- Traces, metrics and logs are only sent somewhere when `OTEL_TRACES_EXPORTER`, `OTEL_METRICS_EXPORTER`, `OTEL_LOGS_EXPORTER` and the `OTEL_EXPORTER_OTLP_*` variables are set in `app.env`. They are not set by default.
+- Traces, metrics and logs are only sent when the stack's `OtlpEndpoint` is set (see "Observability server" below). The deploy document then writes the `OTEL_*` variables into `app.env` on every deploy. It is empty by default.
 - `deploy.sh` creates the server stack on the first run. On later runs it updates the stack and sends the same SSM document. Rerun a failed `deploy-dev` with "Re-run failed jobs".
+
+## Observability server
+
+Optional. One more small server, separate from the app servers, runs `observability/` (Collector, Tempo, Loki,
+Prometheus, Grafana) behind Caddy on its own domain. Dev and prod both send it traces, metrics and logs. It costs
+about $19 a month in `eu-west-2`: a t4g.small ($13), its public IP ($4) and a 20 GB disk ($2). Logs stay on its
+disk, not CloudWatch. Telemetry is kept 7 days and is not backed up.
+
+**1. Elastic IP and DNS.** Same as step 5 above:
+
+```sh
+aws ec2 allocate-address --domain vpc --tag-specifications 'ResourceType=elastic-ip,Tags=[{Key=Name,Value=fernslop-obs}]'
+```
+
+Point an A record for the domain (e.g. `obs.example.com`) at it. On Cloudflare: DNS only (grey cloud).
+
+**2. Create the server.**
+
+```sh
+DOMAIN=obs.example.com EIP_ALLOCATION_ID=<eipalloc-...> infra/obs-deploy.sh
+```
+
+The first run creates two SSM SecureStrings with random values: `/fernslop/otlp-token` (the app servers send it
+with their telemetry) and `/fernslop/grafana-admin-password`. It waits until Grafana answers on `https://<domain>`.
+
+**3. Log in to Grafana** at `https://<domain>` as `admin`, with:
+
+```sh
+aws ssm get-parameter --with-decryption --name /fernslop/grafana-admin-password --query Parameter.Value --output text
+```
+
+**4. Connect dev and prod.** Each takes the tag it is already running, so nothing new is released:
+
+```sh
+TAG=$(curl -s https://<dev domain>/api/health | jq -r .version)
+OTLP_ENDPOINT=https://obs.example.com infra/deploy.sh dev "$TAG"
+TAG=$(curl -s https://<prod domain>/api/health | jq -r .version)
+OTLP_ENDPOINT=https://obs.example.com infra/deploy.sh prod "$TAG"
+```
+
+This updates each server stack, so its deploy document writes the `OTEL_*` variables. CI deploys keep them set
+after that. `OTLP_ENDPOINT=` (empty) stops sending. An image built before the backend had OpenTelemetry sends nothing.
+
+Grafana's dashboard has **Environment** (`dev`, `prod`) and **Deployed version** filters at the top.
+
+**Change its configs.** Edit `observability/` and rerun `infra/obs-deploy.sh` (no variables needed). It uploads
+the directory to the stack's S3 bucket, and the stack's SSM document `fernslop-obs-deploy` syncs it to the server
+and restarts the stack. `observability/docker-compose.server.yaml` and `Caddyfile.server` are the server-only parts.
+
+How it is reached:
+
+- `https://<domain>/v1/traces`, `/v1/metrics`, `/v1/logs`: the Collector's OTLP HTTP. Caddy refuses a request
+  without `Authorization: Bearer <otlp-token>` with 401.
+- Everything else on `https://<domain>` is Grafana, with a login. Prometheus, Loki and Tempo are not reachable from
+  outside.
+- To change the token: `aws ssm put-parameter --overwrite` it, rerun `infra/obs-deploy.sh`, then redeploy dev and
+  prod. Grafana reads the admin password only when it is first created; change it in Grafana after that.
+- No SSH: `aws ssm start-session --target <InstanceId>`; the stack lives in `/opt/obs/observability`.
+- Delete with `aws cloudformation delete-stack --stack-name fernslop-obs`. The Elastic IP and the two SSM
+  parameters stay. Its telemetry goes with it.

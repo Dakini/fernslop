@@ -1,0 +1,25 @@
+# The observability server's only public entry (docker-compose.server.yaml). Let's Encrypt certificate for
+# OBS_DOMAIN. OTLP HTTP needs the shared bearer token; everything else is Grafana, which has its own login.
+{$OBS_DOMAIN} {
+	@otlp path /v1/traces /v1/metrics /v1/logs
+	handle @otlp {
+		@authorized header Authorization "Bearer {$OTLP_TOKEN}"
+		handle @authorized {
+			request_body {
+				max_size 10MB
+			}
+			reverse_proxy otel-collector:4318
+		}
+		respond 401
+	}
+
+	handle {
+		reverse_proxy grafana:3000
+	}
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		Strict-Transport-Security "max-age=31536000"
+	}
+}

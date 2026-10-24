@@ -16,6 +16,8 @@
 # DOMAIN they apply only on the first deploy: an existing stack keeps what it has, and they are ignored with a note.
 # The address is not looked up, so it must be the allocation's own. The IP stays outside the stack.
 # CFN_ROLE_ARN=<arn> runs the stack updates as that CloudFormation service role.
+# OTLP_ENDPOINT=https://<obs domain> sends the app's telemetry to the observability server (infra/obs-deploy.sh);
+# OTLP_ENDPOINT= (set but empty) stops it. Unset keeps what the stack has.
 set -euo pipefail
 
 USAGE="Usage: [DOMAIN=<domain>] infra/deploy.sh <dev|prod> <tag>   (infra/deploy.sh <dev|prod> --names prints the names)"
@@ -158,7 +160,7 @@ if [ "$STACK_EXISTS" = true ]; then
   aws cloudformation deploy --stack-name "$STACK" --template-file infra/ec2-stack.yaml \
     --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset \
     --parameter-overrides AppPrefix="$PREFIX" Environment="$ENVIRONMENT" AmiId="$AMI" AllowPlainHttp="$ALLOW" \
-      ImageTag="$OLD_TAG" \
+      ImageTag="$OLD_TAG" ${OTLP_ENDPOINT+OtlpEndpoint="$OTLP_ENDPOINT"} \
     ${CFN_ROLE_ARN:+--role-arn "$CFN_ROLE_ARN"}
   INSTANCE=$(stack_output "$STACK" InstanceId)
   DOCUMENT=$(stack_output "$STACK" DeployDocumentName)
@@ -190,7 +192,7 @@ else
   aws cloudformation deploy --stack-name "$STACK" --template-file infra/ec2-stack.yaml \
     --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset \
     --parameter-overrides AppPrefix="$PREFIX" Environment="$ENVIRONMENT" ImageTag="$TAG" \
-      DomainName="$DOMAIN_ARG" AllowPlainHttp="$PLAIN" \
+      DomainName="$DOMAIN_ARG" AllowPlainHttp="$PLAIN" ${OTLP_ENDPOINT+OtlpEndpoint="$OTLP_ENDPOINT"} \
       ${EIP_ALLOCATION_ID:+ExistingEipAllocationId="$EIP_ALLOCATION_ID" ExistingEipAddress="$EIP_ADDRESS"} \
     ${CFN_ROLE_ARN:+--role-arn "$CFN_ROLE_ARN"}
 fi

@@ -1,0 +1,246 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Fernslop observability - one small EC2 instance, separate from the app servers, running the observability/
+  Compose stack (OpenTelemetry Collector, Tempo, Loki, Prometheus, Grafana) behind Caddy on DomainName over HTTPS.
+  Dev and prod send it OTLP HTTP with a bearer token. Its configs come from the repo's observability/ directory
+  via the ConfigBucket (infra/obs-deploy.sh). Telemetry lives on the instance's disk for 7 days, with no backups.
+
+Parameters:
+  AppPrefix:
+    Type: String
+    Default: fernslop
+    AllowedPattern: "^[a-z0-9-]+$"
+    ConstraintDescription: lowercase letters, digits and hyphens only
+    Description: >
+      Names the instance (<AppPrefix>-obs) and the two SSM parameters it reads, /<AppPrefix>/otlp-token and
+      /<AppPrefix>/grafana-admin-password (created by infra/obs-deploy.sh).
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Default: vpc-0123456789abcdef0
+    Description: Default VPC
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Default: subnet-0123456789abcdef0
+    Description: Default subnet (eu-west-2a)
+  InstanceType:
+    Type: String
+    Default: t4g.small
+    Description: >
+      ARM. The five services use about 700 MB, so t4g.micro (1 GB) is too small; t4g.small has 2 GB.
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+    Description: Used only when AmiId is empty, i.e. when the stack is first created.
+  AmiId:
+    Type: String
+    Default: ""
+    Description: >
+      The instance's AMI. Empty uses LatestAmiId; infra/obs-deploy.sh passes the running instance's AMI on every
+      update, because LatestAmiId re-resolves and a newer image would replace the instance.
+  DomainName:
+    Type: String
+    MinLength: 1
+    Description: Its DNS must point at the Elastic IP; Caddy then gets a Let's Encrypt certificate for it.
+  ExistingEipAllocationId:
+    Type: String
+    AllowedPattern: "^eipalloc-[0-9a-f]+$"
+    ConstraintDescription: an Elastic IP allocation id such as eipalloc-0123456789abcdef0
+    Description: An existing, unattached Elastic IP. It stays outside the stack, so deleting the stack keeps it.
+
+Conditions:
+  HasAmiId: !Not [!Equals [!Ref AmiId, ""]]
+
+Resources:
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Fernslop observability - HTTP/HTTPS inbound only, no SSH (use SSM Session Manager)
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 80, ToPort: 80, CidrIp: 0.0.0.0/0 }
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0 }
+      Tags:
+        - { Key: App, Value: !Ref AppPrefix }
+        - { Key: Environment, Value: obs }
+
+  # The observability/ directory, synced here by infra/obs-deploy.sh and down to the instance by the deploy document
+  ConfigBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      OwnershipControls:
+        Rules: [{ ObjectOwnership: BucketOwnerEnforced }]
+      Tags:
+        - { Key: App, Value: !Ref AppPrefix }
+        - { Key: Environment, Value: obs }
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - { Effect: Allow, Principal: { Service: ec2.amazonaws.com }, Action: "sts:AssumeRole" }
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Tags:
+        - { Key: App, Value: !Ref AppPrefix }
+        - { Key: Environment, Value: obs }
+      Policies:
+        - PolicyName: read-config-and-secrets
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt ConfigBucket.Arn
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub "${ConfigBucket.Arn}/*"
+              # SecureStrings under the AWS-managed aws/ssm key, which allows decrypting through SSM
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource:
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AppPrefix}/otlp-token"
+                  - !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AppPrefix}/grafana-admin-password"
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref InstanceRole]
+
+  # Only installs Docker; the deploy document below does the rest, on the first deploy and every one after
+  Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !If [HasAmiId, !Ref AmiId, !Ref LatestAmiId]
+      SubnetId: !Ref SubnetId
+      SecurityGroupIds: [!Ref SecurityGroup]
+      IamInstanceProfile: !Ref InstanceProfile
+      MetadataOptions:
+        HttpTokens: required
+        HttpPutResponseHopLimit: 1
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs: { VolumeSize: 20, VolumeType: gp3, Encrypted: true }
+      Tags:
+        - { Key: Name, Value: !Sub "${AppPrefix}-obs" }
+        - { Key: App, Value: !Ref AppPrefix }
+        - { Key: Environment, Value: obs }
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          set -euxo pipefail
+
+          echo "=== swap ==="
+          fallocate -l 2G /swapfile
+          chmod 600 /swapfile
+          mkswap /swapfile
+          swapon /swapfile
+          echo '/swapfile none swap sw 0 0' >> /etc/fstab
+
+          echo "=== docker ==="
+          # Container logs stay on this disk, rotated, rather than going to CloudWatch (which charges per GB)
+          mkdir -p /etc/docker
+          echo '{"log-driver": "json-file", "log-opts": {"max-size": "10m", "max-file": "3"}}' > /etc/docker/daemon.json
+          dnf install -y docker
+          systemctl enable --now docker
+          # Same pinned docker compose release and checksums as infra/ec2-stack.yaml
+          COMPOSE_VERSION=v5.6.1
+          case "$(uname -m)" in
+            x86_64) COMPOSE_SHA256=47737f4236e6d3ccea7291995203f8f018058783b4c3a9469119811a0b5db8c0 ;;
+            aarch64) COMPOSE_SHA256=42cfa75f51ad0ccf290bad37899e0038a8c10a0069e85233ecc1d53e3ff1347d ;;
+            *) echo "No docker compose checksum for $(uname -m)" >&2; exit 1 ;;
+          esac
+          curl -fsSL "https://github.com/docker/compose/releases/download/$COMPOSE_VERSION/docker-compose-linux-$(uname -m)" \
+            -o /tmp/docker-compose
+          echo "$COMPOSE_SHA256  /tmp/docker-compose" | sha256sum -c -
+          mkdir -p /usr/local/lib/docker/cli-plugins
+          install -m 755 /tmp/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
+          rm /tmp/docker-compose
+          mkdir -p /opt/obs
+          echo "=== bootstrap complete ==="
+
+  # Pulls observability/ from the ConfigBucket, writes the secrets from SSM into env files and (re)starts the
+  # stack. infra/obs-deploy.sh sends it after every stack create or update.
+  DeployDocument:
+    Type: AWS::SSM::Document
+    Properties:
+      Name: !Sub "${AWS::StackName}-deploy"
+      DocumentType: Command
+      DocumentFormat: YAML
+      TargetType: /AWS::EC2::Instance
+      UpdateMethod: NewVersion
+      Tags:
+        - { Key: App, Value: !Ref AppPrefix }
+        - { Key: Environment, Value: obs }
+      Content:
+        schemaVersion: "2.2"
+        description: Sync observability/ from S3, write its env files from SSM and run docker compose up.
+        mainSteps:
+          - action: aws:runShellScript
+            name: deploy
+            inputs:
+              timeoutSeconds: "1800"
+              runCommand:
+                - !Sub |
+                  set -euo pipefail
+                  # The first deploy can arrive while UserData is still installing Docker
+                  cloud-init status --wait >/dev/null || true
+                  command -v docker >/dev/null || { echo 'Docker is not installed: see /var/log/cloud-init-output.log' >&2; exit 1; }
+                  cd /opt/obs
+                  aws s3 sync --region ${AWS::Region} --delete --only-show-errors "s3://${ConfigBucket}/observability/" observability/
+                  param() { aws ssm get-parameter --region ${AWS::Region} --with-decryption --name "$1" --query Parameter.Value --output text; }
+                  umask 077
+                  { echo "OBS_DOMAIN=${DomainName}"; echo "OTLP_TOKEN=$(param /${AppPrefix}/otlp-token)"; } > caddy.env
+                  # Grafana only reads the admin password when it first creates its database
+                  { echo "GF_SECURITY_ADMIN_PASSWORD=$(param /${AppPrefix}/grafana-admin-password)"; echo "GF_SERVER_ROOT_URL=https://${DomainName}"; } > grafana.env
+                  cd observability
+                  docker compose -f docker-compose.yaml -f docker-compose.server.yaml up -d --remove-orphans --wait
+                  # Config files are bind-mounted, so a changed one needs a restart, not just up
+                  docker compose -f docker-compose.yaml -f docker-compose.server.yaml restart
+                  docker image prune -f
+
+  ElasticIpAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId: !Ref ExistingEipAllocationId
+      InstanceId: !Ref Instance
+
+  RecoveryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Recover the Fernslop observability instance when the system status check fails
+      Namespace: AWS/EC2
+      MetricName: StatusCheckFailed_System
+      Dimensions: [{ Name: InstanceId, Value: !Ref Instance }]
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions: [!Sub "arn:aws:automate:${AWS::Region}:ec2:recover"]
+      Tags:
+        - { Key: App, Value: !Ref AppPrefix }
+        - { Key: Environment, Value: obs }
+
+Outputs:
+  Url:
+    Value: !Sub "https://${DomainName}"
+  OtlpEndpoint:
+    Description: What the app servers' OTEL_EXPORTER_OTLP_ENDPOINT is set to (infra/deploy.sh OTLP_ENDPOINT).
+    Value: !Sub "https://${DomainName}"
+  InstanceId:
+    Value: !Ref Instance
+  ConfigBucketName:
+    Value: !Ref ConfigBucket
+  DeployDocumentName:
+    Value: !Ref DeployDocument

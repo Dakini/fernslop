@@ -56,9 +56,16 @@ Logs: only empty plant searches are sent, one log line each with the search term
 would grow without limit. Grafana → Explore → Loki:
 `{service_name="fernslop-backend"} | scope_name="fernslop.search"`.
 
+## On a server
+
+`infra/obs-deploy.sh` runs this same stack on its own EC2 instance, which dev and prod send their telemetry to.
+On top of `docker-compose.yaml` it uses `docker-compose.server.yaml`: Caddy with HTTPS in front, a Grafana login,
+and a token for OTLP. See "Observability server" in `infra/README.md`.
+
 ## Files
 
 - `otel-collector.yaml`: receivers, and the exporters to Tempo, Prometheus and Loki. Resource attributes become Prometheus labels
 - `tempo.yaml`, `loki.yaml`, `prometheus.yml`: single-node configs with local storage
 - `grafana/provisioning/datasources/`: the three data sources, linked so a trace opens its logs
 - `grafana/dashboards/`: dashboards loaded at start-up (edits made in Grafana are not saved back here)
+- `docker-compose.server.yaml`, `Caddyfile.server`: server only (above)

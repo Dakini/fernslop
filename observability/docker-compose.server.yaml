@@ -1,0 +1,40 @@
+# Server overrides for the observability stack (infra/obs-stack.yaml), on top of docker-compose.yaml:
+#   docker compose -f docker-compose.yaml -f docker-compose.server.yaml up -d
+# Caddy serves Grafana (with a login) and the collector's OTLP HTTP endpoint (with a bearer token) on one HTTPS
+# domain. Nothing else is reachable from outside. The env files under /opt/obs are written by the stack's
+# deploy document from SSM Parameter Store.
+services:
+  caddy:
+    # Same image as the app servers (infra/ec2-stack.yaml)
+    image: caddy:2-alpine@sha256:eb4d35b7452d1ab6171fbdbe8d9275b2301dad6dad92115d91e19fb9b24d510f
+    restart: unless-stopped
+    env_file: /opt/obs/caddy.env # OBS_DOMAIN, OTLP_TOKEN
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile.server:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - grafana
+      - otel-collector
+
+  prometheus:
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      # Same 7 days as Tempo and Loki, so the disk stays small
+      - --storage.tsdb.retention.time=7d
+
+  grafana:
+    env_file: /opt/obs/grafana.env # GF_SECURITY_ADMIN_PASSWORD, GF_SERVER_ROOT_URL
+    environment:
+      # A login is required: no anonymous access, no sign-up
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_AUTH_DISABLE_LOGIN_FORM: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+
+volumes:
+  caddy_data:
+  caddy_config:
