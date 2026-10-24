@@ -22,6 +22,12 @@ services:
         condition: service_healthy
     environment:
       FERNSLOP_DATABASE_URL: postgresql+psycopg://fernslop:${POSTGRES_PASSWORD:-fernslop}@db:5432/fernslop
+      # Traces go nowhere unless OTEL_TRACES_EXPORTER=otlp; then to the observability stack (observability/README.md)
+      OTEL_TRACES_EXPORTER: ${OTEL_TRACES_EXPORTER:-none}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://host.docker.internal:4318}
+    extra_hosts:
+      # Makes host.docker.internal work on Linux too (Docker Desktop has it already)
+      - "host.docker.internal:host-gateway"
     ports:
       - "${APP_PORT:-8000}:8000"
 

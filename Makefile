@@ -1,6 +1,6 @@
 PORT ?= 8091
 
-.PHONY: backend backend-dev test install up down delete test-frontend test-e2e test-all
+.PHONY: backend backend-dev test install up down delete obs-up obs-down test-frontend test-e2e test-all
 
 install:
 	cd backend && uv sync
@@ -28,6 +28,13 @@ down:
 # Stop the stack and delete its database volume
 delete:
 	docker compose down --volumes --remove-orphans
+
+# Observability stack (Collector, Tempo, Loki, Prometheus, Grafana on http://localhost:3000), a separate Compose project
+obs-up:
+	docker compose -f observability/docker-compose.yaml up -d --wait
+
+obs-down:
+	docker compose -f observability/docker-compose.yaml down
 
 test-frontend:
 	cd frontend && npm test
