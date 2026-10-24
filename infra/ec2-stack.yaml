@@ -395,6 +395,8 @@ Resources:
           {
             echo "FERNSLOP_DATABASE_URL=postgresql+psycopg://fernslop:$PGPASSWORD@db:5432/fernslop"
             echo "FERNSLOP_PUBLIC_URL=$PUBLIC_URL"
+            # Telemetry's deployment.environment.name (backend/app/telemetry.py); the deploy document also sets it
+            echo "FERNSLOP_ENVIRONMENT=${Environment}"
             # No Swagger UI, ReDoc or OpenAPI JSON in production
             echo "FERNSLOP_API_DOCS=0"
           } > app.env
@@ -542,6 +544,10 @@ Resources:
                   touch .env
                   { awk '!/^APP_TAG=/' .env; echo 'APP_TAG={{ tag }}'; } > .env.new
                   mv .env.new .env
+                  # Servers created before FERNSLOP_ENVIRONMENT existed get it here; replace the line, keep the rest
+                  touch app.env
+                  { awk '!/^FERNSLOP_ENVIRONMENT=/' app.env; echo 'FERNSLOP_ENVIRONMENT=${Environment}'; } > app.env.new
+                  mv app.env.new app.env
                   docker compose up -d --pull always
                   docker image prune -f
 

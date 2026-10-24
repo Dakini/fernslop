@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.errors import register_error_handlers
 from app.routers import routers
 from app.static import mount_frontend
+from app.telemetry import setup_telemetry
 
 API_PREFIX = "/api"
 
@@ -51,6 +52,7 @@ def create_app() -> FastAPI:
     for router in routers:
         app.include_router(router, prefix=API_PREFIX)
     mount_frontend(app, API_PREFIX)
+    setup_telemetry(app)
     return app
 
 
