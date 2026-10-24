@@ -1,6 +1,5 @@
 - Tasks are issues that can be found in the backlog folder, up to 5 at a time. 
 - Read the acceptance criteria before starting and before closing
-- Commit regularly
 
 Roles
 

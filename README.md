@@ -2,51 +2,40 @@
 
 **Shared garden plans that anyone can help tend.**
 
-Create a garden, find plants by name or from a photo, and place them on a map of the real space, next to the pond, the veg bed or the herb patch. Everyone with the link sees changes live, gets care reminders, and can undo mistakes. No accounts needed.
+I wanted an app that reminded me when my plants needed watering or feeding, and showed where everything was. It grew into shared gardens: a family, flatmates or a community group all looking after the same space, from one link, with no accounts.
 
-| | |
-| --- | --- |
-| **Try it** | Production: <URL> · Development: <URL> |
-| **Run it** | `make up`, then open http://localhost:8000 |
-| **Test it** | `make test-all` |
-| **Stack** | React 19 · FastAPI · PostgreSQL · Docker Compose · AWS · OpenTelemetry · Grafana |
+**Live:** Production: <URL> · Development: <URL>
 
 ![A garden with a pond, a veg bed and a herb patch, and its plant list](docs/screenshots/garden-canvas.jpg)
 
-## Why Fernslop
+## What this repo provides
 
-Most gardens are looked after by more than one person: a family, flatmates, allotment neighbours, a community group. Nobody has the whole picture:
+| Area | What is here | Details |
+| --- | --- | --- |
+| Problem and behaviour | What the app is for, what it does, how it should behave | [What it does](#what-it-does) · [Product guide](docs/product.md) |
+| Spec and task tracker | A build spec, and one Markdown issue per task with acceptance criteria and a QA verdict | [Agent team](#how-it-was-built-an-agent-team) |
+| Agent team | Five roles with their own briefs, and a process for how they work together | [Agent team](#how-it-was-built-an-agent-team) · [`_docs/process.md`](_docs/process.md) |
+| Agent context | `AGENTS.md` with the commands and links to the process and role docs | [`AGENTS.md`](AGENTS.md) |
+| Application | React frontend, FastAPI backend, PostgreSQL | [Quick start](#quick-start) · [Architecture](docs/architecture.md) |
+| Tests | Unit, integration and end-to-end tests, one command | [Tests](#tests) · [Getting started](docs/getting-started.md#4-run-the-tests) |
+| Containers | App, database and monitoring stack with Docker Compose, one command | [Quick start](#quick-start) |
+| Deployment | Dev and prod on AWS, behind HTTPS | [Deployment](#deployment) · [Deployment guide](docs/deployment.md) |
+| CI/CD | Tests on every pull request, automatic deploy to dev, manual promotion to prod | [Deployment](#deployment) |
+| Observability | Traces, metrics and logs that share a trace ID, viewed in Grafana | [Observability](#observability-alerting-and-on-call) · [Guide](docs/observability.md) |
+| Alerting | An alert when users can't find the plant they want to add | [Observability](#observability-alerting-and-on-call) · [Alert](docs/observability.md#alerting-on-user-impact) |
+| On-call agent | Wakes on an alert, fixes it on a branch or files a GitHub issue | [Observability](#observability-alerting-and-on-call) · [On-call agent](docs/observability.md#on-call-agent) |
 
-- What is planted where?
-- What is that plant called, and how do I look after it?
-- What needs doing this week, and has someone already done it?
+## What it does
 
-Most garden apps make every helper sign up, and keep each person's plants private to them. Fernslop gives each real garden **one shared, living plan**, opened from a link.
+- **Shared gardens:** create one and share its link. Anyone with it can edit, and changes show up live.
+- **Garden canvas:** drag plants to where they grow, and mark areas like a pond or a veg bed.
+- **Find plants:** search about 50 common plants by name, or identify one from a photo.
+- **Care rings:** countdowns for watering, feeding, pruning and harvesting each plant.
+- **Feed and Undo:** every change is logged, and plant and area changes can be undone.
+- **Weekly email:** follow a garden by email and get a summary.
+- **Works on phones:** nothing needs dragging.
 
-Read more in the [product guide](docs/product.md), which covers the problem, who it is for, every feature, and the expected behaviour in detail.
-
-## Features
-
-| | |
-| --- | --- |
-| **Shared gardens** | Create a garden and share its link. All gardens are listed on the home page. |
-| **Garden canvas** | Drag plants to where they grow. Add labelled areas such as ponds and beds. |
-| **Plant search** | Search about 50 common plants by common or scientific name. |
-| **Photo identification** | Upload a photo, get up to 3 matches with confidence, and confirm the right one. |
-| **Care rings** | Countdowns for water, feed, prune and harvest, from each plant's data. |
-| **Activity feed and Undo** | Every change is logged. Plant and area changes can be undone. Post updates and photos. |
-| **Live updates** | Changes show up for everyone on the page without reloading. |
-| **Follow by email** | Confirm once, then get a weekly summary. Unsubscribe in one click. |
-| **Mobile first** | Works on phones; every canvas action also works without dragging. |
-
-<table>
-  <tr>
-    <td width="50%"><img src="docs/screenshots/add-plant-search.jpg" alt="Searching for a plant"><br><sub>Search by common or scientific name</sub></td>
-    <td width="50%"><img src="docs/screenshots/add-plant-photo.jpg" alt="Photo identification with three candidates"><br><sub>Identify from a photo, then confirm</sub></td>
-  </tr>
-</table>
-
-## Expected behaviour at a glance
+### Expected behaviour
 
 | When you... | Fernslop... |
 | --- | --- |
@@ -56,14 +45,14 @@ Read more in the [product guide](docs/product.md), which covers the problem, who
 | Mark a plant watered | Resets its ring and posts to the feed |
 | Click **Undo** in the feed | Reverts that change, unless a later change touched the same thing |
 | Add a 51st plant or an 11th area | Says the garden is full and adds nothing |
-| Search for a plant that isn't in the table | Records the miss; repeated misses raise an alert for the team |
+| Search for a plant that isn't in the table | Records the miss. Repeated misses raise an alert |
 | Go too fast | Says "You're going a bit fast. Try again in N seconds." |
 
-The full list is in the [product guide](docs/product.md#expected-behaviour).
+The full list, with screenshots, is in the [product guide](docs/product.md).
 
 ## Quick start
 
-**Prerequisites:** Docker (with Compose v2), [uv](https://docs.astral.sh/uv/), Node.js 24 and `make`.
+You need Docker (with Compose v2), [uv](https://docs.astral.sh/uv/), Node.js 24 and `make`.
 
 ```sh
 git clone https://github.com/Dakini/fernslop.git
@@ -71,14 +60,14 @@ cd fernslop
 make up
 ```
 
-That one command builds the image and starts the app, PostgreSQL, and the observability stack.
+This builds the image and starts the app, PostgreSQL and the monitoring stack.
 
-- App: http://localhost:8000 (three demo gardens are seeded)
+- App: http://localhost:8000 (three demo gardens are already there)
 - Grafana: http://localhost:3000
 
-`make down` stops everything and keeps the data. `make delete` also deletes the database.
+`make down` stops everything and keeps the data. `make delete` also deletes the database. To run the backend and frontend separately with live reload, see [Getting started](docs/getting-started.md#3-run-for-development).
 
-To run the backend and frontend on their own with reload, see [Getting started](docs/getting-started.md#3-run-for-development).
+Stack: React 19, FastAPI, PostgreSQL, Docker Compose, AWS, OpenTelemetry, Grafana.
 
 ## Tests
 
@@ -86,13 +75,7 @@ To run the backend and frontend on their own with reload, see [Getting started](
 make test-all
 ```
 
-| Suite | Command | Tool | Covers |
-| --- | --- | --- | --- |
-| Backend | `make test` | pytest | Unit tests, and integration tests of every API route against a real database |
-| Frontend | `make test-frontend` | Vitest | Components, the services layer and helpers |
-| End to end | `make test-e2e` | Playwright | Two browsers against a throwaway Docker stack: sharing a garden live, posting a photo, a missing page |
-
-CI runs all three on every pull request and every push to `main`.
+This runs the backend tests (pytest: unit tests, plus every API route against a real database), the frontend tests (Vitest) and the end-to-end tests (Playwright, two browsers against a throwaway Docker stack). CI runs all three on every pull request. Details are in [Getting started](docs/getting-started.md#4-run-the-tests).
 
 ## Deployment
 
@@ -102,64 +85,48 @@ pull request ──▶ tests ──▶ merge to main ──▶ build image ─�
                                           "Promote to prod" (manual) ──▶ deploy the same image to prod
 ```
 
-Dev and prod each run on an AWS EC2 server, defined in CloudFormation, behind HTTPS. GitHub Actions deploy to them with OIDC, so no AWS keys are stored. See [Deployment](docs/deployment.md), with every setup command in [`infra/README.md`](infra/README.md).
+Dev and prod each run on an AWS EC2 server, defined in CloudFormation. GitHub Actions deploys with OIDC, so no AWS keys are stored. See the [deployment guide](docs/deployment.md), and [`infra/README.md`](infra/README.md) for every setup command.
 
-## Observability and on-call
+## Observability, alerting and on-call
 
-- **Telemetry:** traces, metrics and structured logs via OpenTelemetry. They share a trace ID, and are stored in Tempo, Prometheus and Loki and viewed in Grafana. No request bodies, headers or personal data are sent.
-- **Alerting:** an alert fires when people keep searching for a plant the app doesn't have, because those users can't add their plant.
-- **On-call agent:** a script polls the alerts every minute. It hands each new one to a coding agent in its own git worktree, which fixes it on a branch or files a GitHub issue for a person.
+- **Telemetry:** traces, metrics and structured logs from OpenTelemetry. They share a trace ID, and you view them in Grafana. No request bodies, headers or personal data are sent.
+- **Alerting:** an alert fires when people keep searching for a plant the app doesn't have, because they can't add it.
+- **On-call agent:** a script checks the alerts every minute. It hands each new alert to a coding agent, which fixes it on a branch or files a GitHub issue for a person.
 
 See [Observability, alerts and on-call](docs/observability.md).
 
 ## How it was built: an agent team
 
-Fernslop was built by a team of AI agents with defined roles, working from a written spec and a task tracker.
+A team of AI agents built Fernslop, working from a written spec and a task tracker.
 
-| Role | Responsibility | Brief |
+| Role | Does | Brief |
 | --- | --- | --- |
-| Orchestrator | Sizes each request, runs the other roles, closes issues only after QA passes | [`_docs/process.md`](_docs/process.md) |
-| Task manager (TM) | Turns a user request into issues | [`_docs/team/tm.md`](_docs/team/tm.md) |
-| Product manager (PM) | Grooms an issue: goal, acceptance criteria, scope, constraints | [`_docs/team/pm.md`](_docs/team/pm.md) |
-| Software engineer | Implements one groomed issue and documents what changed | [`_docs/team/software-engineer.md`](_docs/team/software-engineer.md) |
-| QA engineer | Checks the result against the acceptance criteria and outputs PASS or FAIL | [`_docs/team/qa-engineer.md`](_docs/team/qa-engineer.md) |
+| Orchestrator | Sizes each request, runs the other roles, closes issues after QA passes | [`_docs/process.md`](_docs/process.md) |
+| Task manager | Turns a request into issues | [`tm.md`](_docs/team/tm.md) |
+| Product manager | Grooms an issue: goal, acceptance criteria, scope | [`pm.md`](_docs/team/pm.md) |
+| Software engineer | Implements one groomed issue | [`software-engineer.md`](_docs/team/software-engineer.md) |
+| QA engineer | Checks the result against the acceptance criteria: PASS or FAIL | [`qa-engineer.md`](_docs/team/qa-engineer.md) |
 
-**Spec:** [`_docs/lovable-spec.md`](_docs/lovable-spec.md) is the build spec. [`_docs/plan.md`](_docs/plan.md) is the first MVP plan, and [`audit.md`](audit.md) is a review that led to follow-up issues.
-
-**Task tracker:** [`backlog/`](backlog/) has one Markdown file per issue: 67 in [`done/`](backlog/done/) and 16 in [`parked/`](backlog/parked/). Each issue has a goal, acceptance criteria, the engineer's notes and the QA verdict. For example, see [`222-photos-daily-photo-cap.md`](backlog/done/222-photos-daily-photo-cap.md). Problems the on-call agent can't fix are filed as [GitHub issues](https://github.com/Dakini/fernslop/issues?q=label%3Aon-call) labelled `on-call`.
-
-**Agent context:** [`AGENTS.md`](AGENTS.md) (loaded through `CLAUDE.md`) gives agents the project commands and points them to the modular docs. Project skills are in [`.claude/skills/`](.claude/skills/), for example `design-check`, which screenshots the UI at phone, tablet and desktop sizes.
+- **Spec:** [`_docs/plan.md`](_docs/plan.md) is the first plan. [`_docs/lovable-spec.md`](_docs/lovable-spec.md) is the full build spec. [`audit.md`](audit.md) is a review that led to follow-up issues.
+- **Task tracker:** [`backlog/`](backlog/) has one file per issue, in [`done/`](backlog/done/) and [`parked/`](backlog/parked/). Each has a goal, acceptance criteria, the engineer's notes and the QA verdict. Example: [`222-photos-daily-photo-cap.md`](backlog/done/222-photos-daily-photo-cap.md). Problems the on-call agent can't fix become [GitHub issues](https://github.com/Dakini/fernslop/issues?q=label%3Aon-call) labelled `on-call`.
+- **Agent context:** [`AGENTS.md`](AGENTS.md), loaded through `CLAUDE.md`. Project skills are in [`.claude/skills/`](.claude/skills/), such as `design-check`, which screenshots the UI at phone, tablet and desktop sizes.
 
 ## Repository layout
 
 ```
 backend/            FastAPI app, tests, seed data           (Python, uv)
-frontend/           React single-page app and tests         (Node, Vite)
+frontend/           React app and tests                     (Node, Vite)
 e2e/                Playwright end-to-end tests
 infra/              CloudFormation templates and deploy scripts
 observability/      Collector, Tempo, Prometheus, Loki, Grafana (dashboards, alerts)
 on-call-engineer/   Alert poller that hands alerts to a coding agent
-.github/workflows/  CI (tests, build, deploy to dev) and promotion to prod
-docs/               Guides for users and operators (this README links them)
+.github/workflows/  CI and promotion to prod
+docs/               Guides: product, getting started, architecture, deployment, observability
 _docs/              Spec, process and agent-team briefs
-backlog/            Task tracker: done/ and parked/ issues
+backlog/            Task tracker
 openapi.yaml        API contract
-Dockerfile          One image: built frontend plus backend
-docker-compose.yaml App and PostgreSQL
 Makefile            Every command above
 ```
-
-## Documentation
-
-| Guide | Read it to... |
-| --- | --- |
-| [Product guide](docs/product.md) | Understand the problem, the features and the expected behaviour |
-| [Getting started](docs/getting-started.md) | Set up, run, configure and test it, and fix common problems |
-| [Architecture](docs/architecture.md) | See how the parts fit, the data model and a request end to end |
-| [Deployment](docs/deployment.md) | Deploy it to AWS, and see how CI/CD and promotion work |
-| [Observability, alerts and on-call](docs/observability.md) | Follow a request through telemetry, see the alert, and run the on-call agent |
-| [Testing guidelines](_docs/testing-guidelines.md) | Write tests the way this project does |
-| [Design system](_docs/design-system.md) | Keep the UI consistent |
 
 ## Known limitations
 

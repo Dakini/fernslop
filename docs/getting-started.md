@@ -95,8 +95,6 @@ The backend tests use SQLite by default. To run them against Postgres too, set `
 
 CI runs all three suites on every pull request and every push to `main`.
 
-How tests are written: [`testing-guidelines.md`](../_docs/testing-guidelines.md).
-
 ## 5. Configuration
 
 Everything is optional. The defaults work for local use.

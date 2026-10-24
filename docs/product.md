@@ -2,15 +2,14 @@
 
 What Fernslop is for, what it does, and how it should behave.
 
-- Full build spec: [`lovable-spec.md`](../_docs/lovable-spec.md)
-- First MVP plan, before the scope changed to shared gardens: [`plan.md`](../_docs/plan.md)
-- Design system: [`design-system.md`](../_docs/design-system.md)
+- The original plan for the app: [`plan.md`](../_docs/plan.md)
+- The full build spec, taken to Lovable: [`lovable-spec.md`](../_docs/lovable-spec.md)
 
 ## The problem
 
-Most gardens are looked after by more than one person. A family shares a back garden. Neighbours share an allotment plot. A street looks after a community orchard.
+I just wanted an app that reminded me about my plants: something simple that I could arrange, and that told me when they needed watering.
 
-Between them, nobody has the full picture:
+It grew into shared and community gardens, where more people means more questions:
 
 - **What is planted where?** It lives in one person's head, on a scrap of paper, or in a camera roll.
 - **What is that plant?** People often don't know its name, so they can't look up how to care for it.
@@ -23,7 +22,7 @@ Between them, nobody has the full picture:
 - **Beginners** who need plain care guidance and a nudge when something is due.
 - **Occasional helpers**, like a neighbour watering while you are away. They should be able to help from a link, with no sign-up.
 
-## The solution
+## What it does
 
 Fernslop gives each real garden **one shared, living plan**. Anyone with the link can see it and edit it, and there are no accounts. Changes show up live for everyone looking at the garden. Every change is recorded in the garden's activity feed, and plant and area changes can be undone, so an open garden is safe to share.
 
