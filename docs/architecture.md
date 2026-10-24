@@ -4,14 +4,62 @@ How the parts of Fernslop fit together.
 
 ## Overview
 
+```mermaid
+flowchart TB
+    user(["<b>Gardener</b><br/>browser or phone"])
+
+    subgraph server["EC2 server: dev or prod (Docker Compose)"]
+        direction LR
+        caddy["<b>Caddy</b><br/>HTTPS, Let's Encrypt"]
+        app["<b>app</b> container<br/>FastAPI under /api<br/>serves the React SPA<br/>live updates over SSE"]
+        db[("<b>PostgreSQL 17</b><br/>gardens, plants, feed,<br/>photos, follows")]
+        timers["<b>systemd timers</b><br/>photo cleanup,<br/>garden purge,<br/>nightly backup"]
+        caddy --> app
+        app -->|SQLAlchemy| db
+        timers -->|"python -m app.*"| app
+    end
+
+    subgraph obs["Observability: its own Compose project or server"]
+        direction LR
+        collector["<b>OTel Collector</b>"]
+        tempo[("<b>Tempo</b><br/>traces")]
+        prom[("<b>Prometheus</b><br/>metrics")]
+        loki[("<b>Loki</b><br/>logs")]
+        grafana["<b>Grafana</b><br/>dashboards, alert rules"]
+        collector --> tempo & prom & loki
+        tempo & prom & loki --> grafana
+    end
+
+    subgraph outside["Outside services"]
+        direction LR
+        plantnet["<b>Pl@ntNet API</b><br/>photo identification"]
+        s3[("<b>S3</b><br/>database backups")]
+    end
+
+    subgraph oncallbox["On-call"]
+        direction LR
+        oncall["<b>On-call agent</b><br/>on-call-engineer/"]
+        github["<b>GitHub</b><br/>issues labelled on-call"]
+        oncall -->|"fix on a branch, or an issue"| github
+    end
+
+    user <-->|"HTTPS: pages, /api, SSE"| caddy
+    app -->|photo| plantnet
+    timers -->|pg_dump| s3
+    app -->|"OTLP: traces, metrics, logs"| collector
+    oncall -->|"polls alerts every minute"| grafana
+
+    classDef person fill:#2f6b4f,stroke:#1d4532,color:#fff
+    classDef container fill:#4f8a6b,stroke:#2f6b4f,color:#fff
+    classDef store fill:#7aa98c,stroke:#2f6b4f,color:#fff
+    classDef external fill:#8a8a8a,stroke:#5c5c5c,color:#fff
+    class user person
+    class caddy,app,timers,collector,grafana,oncall container
+    class db,tempo,prom,loki store
+    class plantnet,s3,github external
 ```
-                 ┌──────────────────────── one container ────────────────────────┐
- Browser  ──────▶│  Static frontend (React SPA)      FastAPI backend under /api  │──▶ PostgreSQL
- (React)  ◀─SSE──│                                    │                          │
-                 └────────────────────────────────────┼──────────────────────────┘
-                                                      ├──▶ Pl@ntNet (photo identification)
-                                                      └──▶ OpenTelemetry ──▶ Collector ──▶ Tempo / Prometheus / Loki ──▶ Grafana
-```
+
+Dark green is the gardener, mid green is what this repo runs, light green stores data, and grey is an outside service. Locally, `make up` runs the same app and database without Caddy or the timers, and the observability stack beside them.
 
 One Docker image holds both the built frontend and the backend. The backend serves the frontend and the API from the same origin, so there is no CORS setup in production.
 

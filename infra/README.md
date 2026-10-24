@@ -124,7 +124,7 @@ aws cloudformation delete-stack --stack-name fernslop          # or prod-fernslo
 aws cloudformation wait stack-delete-complete --stack-name fernslop
 ```
 
-Redo step 6 with the same Elastic IP, then update `INSTANCE_ID` (step 7). Do not delete the two CI stacks. The data on the server goes with it; there are no backups.
+Redo step 6 with the same Elastic IP, then update `INSTANCE_ID` (step 7). Do not delete the two CI stacks. The database on the server goes with it. A nightly dump is kept in the stack's S3 backup bucket, which is not deleted with the stack, so only changes since the last dump are lost.
 
 If the ECR repository was deleted by hand, stack updates fail with `repository ... does not exist`. Delete the `fernslop-ecr` stack, redo step 2 for it, then update `ECR_PUSH_ROLE_ARN` and `ECR_REPOSITORY_URI`.
 
