@@ -1,7 +1,7 @@
 # Grafana-managed alert rules, loaded at start-up like the dashboards. No contact point is set up yet, so they
 # show under Alerting -> Alert rules and are not sent anywhere.
 # Grafana expands environment variables in the labels of a provisioned rule but not in its annotations, so a
-# template's $ is written $$ in labels and $ in annotations. externalURL is GF_SERVER_ROOT_URL.
+# template's $ is written $$ in labels and $ in annotations. externalURL is GF_SERVER_ROOT_URL, ending in /.
 apiVersion: 1
 
 groups:
@@ -58,6 +58,6 @@ groups:
             the name people use to an existing plant so the search finds it. If it is a typo of a plant we have,
             or noise, silence this term for a week in Grafana (Alerting -> Silences, search_term=<term>).
           dashboard_url: >-
-            {{ externalURL }}/d/fernslop-app/fernslop-app-metrics?var-environment={{ $labels.deployment_environment_name }}&var-version={{ $labels.service_version }}&from=now-6h&to=now
+            {{ externalURL }}d/fernslop-app/fernslop-app-metrics?var-environment={{ $labels.deployment_environment_name }}&var-version={{ $labels.service_version }}&from=now-6h&to=now
           __dashboardUid__: fernslop-app
           __panelId__: "10"

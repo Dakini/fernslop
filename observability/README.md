@@ -61,6 +61,18 @@ server checks again that it finds nothing. One log line each, with the search te
 would grow without limit. Grafana → Explore → Loki:
 `{service_name="fernslop-backend"} | scope_name="fernslop.search"`.
 
+## Alerts
+
+Grafana → Alerting → Alert rules → **Fernslop**. They are provisioned from `grafana/provisioning/alerting/`. No
+contact point is set up, so they show there and are not sent anywhere yet.
+
+- **Plant search term keeps finding nothing**: one search term found no plants more than 4 times in the last hour,
+  in one environment and version, for 10 minutes. Checked every 5 minutes. A miss counts at most once per opening
+  of the dialog, so this is several real searches for a plant the table does not have. Labels: `owner=product`,
+  `severity=warning`, `service`, `environment`, `version`, `search_term`. The annotations hold a summary, what to do
+  (add the plant to `_PLANTS` in `backend/app/seed.py`, or silence the term), and `dashboard_url`. That link is
+  built from `GF_SERVER_ROOT_URL`, which locally is `http://localhost:3000` (`GRAFANA_ROOT_URL` to change).
+
 ## On a server
 
 `infra/obs-deploy.sh` runs this same stack on its own EC2 instance, which dev and prod send their telemetry to.
