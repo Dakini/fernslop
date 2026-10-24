@@ -18,10 +18,16 @@ No dependencies beyond Python 3.12. The agent CLI must be on `PATH` and logged i
    the branch `oncall/<fingerprint>-<time>`, made from the current `HEAD`. Your checkout is not touched.
 3. The agent runs in that worktree with the alert as JSON. It is told to follow the runbook, run the backend
    tests and not commit.
-4. Its report, the changed files and the alert are written to `runs/<fingerprint>-<time>.md`.
+4. If the agent changed files, the script commits them to the branch, with the agent's report as the commit
+   message. The agent itself cannot commit.
+5. The report, the changed files and the alert are written to `runs/<fingerprint>-<time>.md`. The script
+   logs that path.
 
-Review the branch and merge it, or delete it:
-`git worktree remove on-call-engineer/worktrees/<name> && git branch -D oncall/<name>`.
+For example, a search term that is a real plant: the agent adds it to `_PLANTS` in `backend/app/seed.py` and runs
+the tests, and the branch has one commit with that change. Look at it with `git log -p main..oncall/<name>`, then
+merge it, or delete it:
+`git worktree remove on-call-engineer/worktrees/<name> && git branch -D oncall/<name>`. A run that changes nothing
+leaves an empty branch, which you can delete the same way.
 
 Agents run one at a time, and polling waits while one runs. Alerts that fire meanwhile are picked up on the next
 poll. An agent run is stopped after 30 minutes (`--agent-timeout`). Handled firings are kept in `state.json`, so

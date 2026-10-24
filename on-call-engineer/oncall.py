@@ -6,7 +6,7 @@
 
 Each alert gets its own git worktree and branch (oncall/<fingerprint>), so the agent never touches your checkout.
 The agent can read and edit files there and run the backend tests. It cannot use the network, run other commands,
-commit or push. You review its branch. See README.md.
+commit or push. When it is done, this script commits its changes to the branch for you to review. See README.md.
 """
 
 import argparse
@@ -113,6 +113,11 @@ def run_agent(alert: dict, agent_cmd: str, timeout: int) -> None:
     except subprocess.TimeoutExpired:
         output, status = "", f"timed out after {timeout} s"
     changed = subprocess.run(["git", "-C", str(worktree), "status", "--short"], capture_output=True, text=True).stdout
+    if changed:
+        # The script commits, not the agent, so the branch can be reviewed and merged like any other
+        git = ["git", "-C", str(worktree)]
+        subprocess.run([*git, "add", "-A"], check=True)
+        subprocess.run([*git, "commit", "-q", "-m", f"On-call: {name}\n\n{output.strip()[:4000]}"], check=True)
     report.write_text(
         f"# {name}\n\nBranch: `{branch}`\nWorktree: `{worktree}`\nAgent: {status}\n\n"
         f"## Changed files\n\n```\n{changed or '(none)'}\n```\n\n## Agent report\n\n{output}\n\n"
