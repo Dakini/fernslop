@@ -54,7 +54,8 @@ at the top. The metrics are defined in `backend/app/metrics.py` and exported eve
 `service_version` labels.
 
 Logs: only empty plant searches are sent. The search box searches as you type, so a miss is only counted when the
-person settles on the term: Enter, switching to the Photo tab, or closing the dialog (`recordSearchMiss`). The
+person settles on the term: they stop typing for 1.5 seconds, or sooner press Enter, switch to the Photo tab or close
+the dialog (`recordSearchMiss`). The
 server checks again that it finds nothing. One log line each, with the search term (lower-cased, trimmed, at most
 100 characters) as `search_term`. The term is in Loki rather than Prometheus, because one series per term
 would grow without limit. Grafana → Explore → Loki:

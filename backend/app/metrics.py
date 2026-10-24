@@ -8,7 +8,8 @@
   (the frontend sends ``X-Device-Id`` on writes only, so people who only look are not counted)
 - ``fernslop.photos.uploaded``: photos uploaded for posts (``uploadPhoto``; identify photos are not stored or counted)
 - ``fernslop.plant_search.empty``: plant searches the person settled on that found nothing, reported by the frontend
-  on Enter, on switching to the Photo tab or on closing the dialog (``recordSearchMiss``), not on every keystroke.
+  once the person stops typing for 1.5 seconds, or sooner on Enter, the Photo tab or closing the dialog
+  (``recordSearchMiss``), not on every keystroke.
   The query is not a metric
   label (user text would make one series per query); ``record_empty_search`` logs it instead, as ``search.term``
   on the ``fernslop.search`` logger, which telemetry.py exports as OpenTelemetry logs (Loki)

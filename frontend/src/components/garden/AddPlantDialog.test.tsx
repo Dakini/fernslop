@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setServices, type GardenService, type Plant } from "@/services";
-import { AddPlantDialog } from "./AddPlantDialog";
+import { AddPlantDialog, MISS_AFTER_MS } from "./AddPlantDialog";
 
 vi.mock("@/lib/image", () => ({ prepareImage: async (file: File) => file }));
 
@@ -28,7 +28,20 @@ function setup() {
 }
 
 describe("AddPlantDialog search misses", () => {
-  it("does not report a miss while typing, only on Enter, and only once per term", async () => {
+  it("reports a miss once the person stops typing, and only the term they stopped on", async () => {
+    const { recordSearchMiss, typeAndSettle } = setup();
+
+    // Each of these finds nothing, but the next keystroke comes before the pause is up
+    await typeAndSettle("k");
+    await typeAndSettle("ka");
+    await typeAndSettle("kale");
+    expect(recordSearchMiss).not.toHaveBeenCalled();
+
+    await waitFor(() => expect(recordSearchMiss).toHaveBeenCalledWith("kale"), { timeout: MISS_AFTER_MS + 1000 });
+    expect(recordSearchMiss).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports a miss on Enter before the pause is up, and only once per term", async () => {
     const { input, recordSearchMiss, typeAndSettle } = setup();
 
     await typeAndSettle("ka");

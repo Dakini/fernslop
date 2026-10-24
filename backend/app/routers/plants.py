@@ -47,7 +47,7 @@ def search_plants(store: Annotated[StoreProtocol, Depends(get_store)], q: str = 
 
 
 # The search box searches on every keystroke, so a search that finds nothing is not yet a miss: the frontend
-# reports one when the person settles on the term (Enter, the Photo tab, or closing the dialog).
+# reports one when the person settles on the term (stops typing, or Enter, the Photo tab, closing the dialog).
 @router.post(
     "/plants/search/misses",
     operation_id="recordSearchMiss",

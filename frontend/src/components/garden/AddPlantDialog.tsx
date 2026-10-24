@@ -11,6 +11,8 @@ import { prepareImage } from "@/lib/image";
 import { PlantAvatar } from "./PlantAvatar";
 
 const LOW_CONFIDENCE = 0.3;
+/** A search that finds nothing counts as a miss once the person has stopped typing for this long. */
+export const MISS_AFTER_MS = 1500;
 
 export function AddPlantDialog({ open, onOpenChange, onPick }: { open: boolean; onOpenChange: (o: boolean) => void; onPick: (plant: Plant) => void }) {
   const [tab, setTab] = useState("search");
@@ -43,13 +45,21 @@ export function AddPlantDialog({ open, onOpenChange, onPick }: { open: boolean; 
     };
   }, [q, open]);
 
-  // Only a term the person settled on counts, not each keystroke on the way to it
+  // Only a term the person settled on counts, not each keystroke on the way to it: they stopped typing, or
+  // left the search (Enter, the Photo tab, closing the dialog) before the pause was up
   function reportMiss() {
     const term = q.trim().toLowerCase();
     if (!term || tab !== "search" || resultsFor !== q || results.length || reported.current.has(term)) return;
     reported.current.add(term);
     void getServices().recordSearchMiss(q);
   }
+
+  useEffect(() => {
+    if (!open) return;
+    const timer = setTimeout(reportMiss, MISS_AFTER_MS);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- re-armed by each keystroke and each result
+  }, [open, q, results, resultsFor, tab]);
 
   function onTabChange(next: string) {
     if (next !== "search") {

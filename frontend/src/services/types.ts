@@ -167,7 +167,7 @@ export interface GardenService {
   /** At most 12 matches, in reference order. */
   searchPlants(query: string): Promise<Plant[]>;
   /**
-   * The person settled on `query` (Enter, the Photo tab, closing the dialog) and it found nothing. Telemetry
+   * The person settled on `query` (stopped typing, or Enter, the Photo tab, closing the dialog) and it found nothing. Telemetry
    * only: the server checks the term again, and failures are ignored.
    */
   recordSearchMiss(query: string): Promise<void>;
