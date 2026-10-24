@@ -22,3 +22,4 @@ Rules
 - Dependencies go in `pyproject.toml`. Ask before adding one, so other agents
   can pick up the tasks and know what is used
 - Commit regularly
+
