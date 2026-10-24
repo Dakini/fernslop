@@ -1,6 +1,6 @@
-"""OpenTelemetry tracing: one server span per HTTP request, tagged with service, environment and version.
+"""OpenTelemetry tracing and metrics, tagged with service, environment and version.
 
-Every span's resource carries:
+Traces have one server span per HTTP request; the metrics are listed in app/metrics.py. Both share a resource with:
 
 - ``service.name``: ``fernslop-backend``
 - ``deployment.environment.name``: ``FERNSLOP_ENVIRONMENT`` (``dev``/``prod`` on the servers), else ``local``
@@ -9,10 +9,10 @@ Every span's resource carries:
 The standard OpenTelemetry variables still apply and win over the values above:
 
 - ``OTEL_SERVICE_NAME`` and ``OTEL_RESOURCE_ATTRIBUTES`` override the resource
-- ``OTEL_TRACES_EXPORTER``: ``otlp`` (configured by the ``OTEL_EXPORTER_OTLP_*`` variables), ``console``
-  (stdout) or ``none``. Unset means ``none``: spans are made but never exported, so local runs and tests
-  need no collector
-- ``OTEL_SDK_DISABLED=true`` turns tracing off entirely
+- ``OTEL_TRACES_EXPORTER`` and ``OTEL_METRICS_EXPORTER``: ``otlp`` (configured by the ``OTEL_EXPORTER_OTLP_*``
+  variables), ``console`` (stdout) or ``none``. Unset means ``none``: nothing is exported, so local runs and
+  tests need no collector. Metrics are exported every ``OTEL_METRIC_EXPORT_INTERVAL`` ms (default 60000)
+- ``OTEL_SDK_DISABLED=true`` turns tracing and metrics off entirely
 
 Request and response bodies and headers are never recorded.
 """
@@ -23,6 +23,8 @@ import sys
 
 from fastapi import FastAPI
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import ConsoleMetricExporter, MetricReader, PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import OTELResourceDetector, Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import (
@@ -31,6 +33,8 @@ from opentelemetry.sdk.trace.export import (
     SimpleSpanProcessor,
     SpanProcessor,
 )
+
+from app import metrics
 
 logger = logging.getLogger(__name__)
 
@@ -56,30 +60,57 @@ def build_resource() -> Resource:
     return defaults.merge(OTELResourceDetector().detect())
 
 
-def _span_processors() -> list[SpanProcessor]:
-    processors: list[SpanProcessor] = []
-    for name in _env("OTEL_TRACES_EXPORTER").lower().split(","):
+def _exporter_names(variable: str) -> list[str]:
+    names = []
+    for name in _env(variable).lower().split(","):
         name = name.strip()
         if name in ("", "none"):
             continue
+        if name in ("otlp", "console"):
+            names.append(name)
+        else:
+            logger.warning("Ignoring unknown %s %r", variable, name)
+    return names
+
+
+def _span_processors() -> list[SpanProcessor]:
+    processors: list[SpanProcessor] = []
+    for name in _exporter_names("OTEL_TRACES_EXPORTER"):
         if name == "otlp":
             # Imported here so the protobuf/requests stack loads only when exporting
             from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
             processors.append(BatchSpanProcessor(OTLPSpanExporter()))
-        elif name == "console":
-            processors.append(SimpleSpanProcessor(ConsoleSpanExporter(out=sys.stdout)))
         else:
-            logger.warning("Ignoring unknown OTEL_TRACES_EXPORTER %r", name)
+            processors.append(SimpleSpanProcessor(ConsoleSpanExporter(out=sys.stdout)))
     return processors
 
 
+def _metric_readers() -> list[MetricReader]:
+    readers: list[MetricReader] = []
+    for name in _exporter_names("OTEL_METRICS_EXPORTER"):
+        if name == "otlp":
+            from opentelemetry.exporter.otlp.proto.http.metric_exporter import OTLPMetricExporter
+
+            readers.append(PeriodicExportingMetricReader(OTLPMetricExporter()))
+        else:
+            readers.append(PeriodicExportingMetricReader(ConsoleMetricExporter(out=sys.stdout)))
+    return readers
+
+
 def setup_telemetry(app: FastAPI) -> None:
-    """Trace ``app``'s requests with its own TracerProvider (create_app runs once per test, so nothing global)."""
+    """Trace ``app``'s requests with its own TracerProvider and count its metrics.
+
+    create_app runs once per test, so the OpenTelemetry globals are never set: the TracerProvider is passed to
+    the instrumentor, and app.metrics records into the MeterProvider of the app created last.
+    """
     if _env("OTEL_SDK_DISABLED").lower() == "true":
         return
-    provider = TracerProvider(resource=build_resource())
+    resource = build_resource()
+    tracer_provider = TracerProvider(resource=resource)
     for processor in _span_processors():
-        provider.add_span_processor(processor)
+        tracer_provider.add_span_processor(processor)
+    metrics.install(MeterProvider(resource=resource, metric_readers=_metric_readers()))
+    app.add_middleware(metrics.MetricsMiddleware)
     # Only the server span per request, not the ASGI receive/send child spans
-    FastAPIInstrumentor.instrument_app(app, tracer_provider=provider, exclude_spans=["receive", "send"])
+    FastAPIInstrumentor.instrument_app(app, tracer_provider=tracer_provider, exclude_spans=["receive", "send"])

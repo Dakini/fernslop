@@ -26,26 +26,32 @@ All ports are bound to `127.0.0.1`. Tempo, Loki and Prometheus keep 7 days of da
 
 ## Send the app's telemetry to it
 
-The backend only exports when `OTEL_TRACES_EXPORTER` is set (see `backend/app/telemetry.py`).
+The backend only exports when `OTEL_TRACES_EXPORTER` and `OTEL_METRICS_EXPORTER` are set (see `backend/app/telemetry.py`).
 
 Backend on the host (`make backend`):
 
 ```sh
-OTEL_TRACES_EXPORTER=otlp OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 make backend
+OTEL_TRACES_EXPORTER=otlp OTEL_METRICS_EXPORTER=otlp OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 make backend
 ```
 
-App container (`make up`): it already points at `http://host.docker.internal:4318`, so set only the exporter:
+App container (`make up`): it already points at `http://host.docker.internal:4318`, so set only the exporters:
 
 ```sh
-OTEL_TRACES_EXPORTER=otlp make up
+OTEL_TRACES_EXPORTER=otlp OTEL_METRICS_EXPORTER=otlp make up
 ```
 
-Then in Grafana go to Explore → Tempo and search for `service.name = fernslop-backend`. Each trace has
-`deployment.environment.name` and `service.version`. The backend sends traces only for now. The Prometheus
-and Loki pipelines are ready for metrics and logs.
+Traces: Grafana → Explore → Tempo, search `service.name = fernslop-backend`.
+
+Metrics: the **Fernslop → Fernslop app metrics** dashboard shows gardens created, garden plants created,
+creation failures, active participants and plant searches with no results. The metrics are defined in
+`backend/app/metrics.py` and exported every minute (`OTEL_METRIC_EXPORT_INTERVAL` in ms to change it). Every
+series has `deployment_environment_name` and `service_version` labels.
+
+The backend does not send logs yet. The Loki pipeline is ready for them.
 
 ## Files
 
 - `otel-collector.yaml`: receivers, and the exporters to Tempo, Prometheus and Loki. Resource attributes become Prometheus labels
 - `tempo.yaml`, `loki.yaml`, `prometheus.yml`: single-node configs with local storage
 - `grafana/provisioning/datasources/`: the three data sources, linked so a trace opens its logs
+- `grafana/dashboards/`: dashboards loaded at start-up (edits made in Grafana are not saved back here)

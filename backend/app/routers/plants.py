@@ -5,6 +5,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, UploadFile
 
+from app import metrics
 from app.errors import ApiError
 from app.identify import (
     IDENTIFY_FAILED_MESSAGE,
@@ -39,7 +40,10 @@ def search_plants(store: Annotated[StoreProtocol, Depends(get_store)], q: str = 
         for plant in plants
         if needle in plant.common_name.casefold() or needle in plant.scientific_name.casefold()
     )
-    return list(islice(matches, DEFAULT_SEARCH_LIMIT))
+    found = list(islice(matches, DEFAULT_SEARCH_LIMIT))
+    if not found:
+        metrics.current().empty_plant_searches.add(1)
+    return found
 
 
 @router.post(
