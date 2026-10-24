@@ -151,7 +151,11 @@ disk, not CloudWatch. Telemetry is kept 7 days and is not backed up.
 aws ec2 allocate-address --domain vpc --tag-specifications 'ResourceType=elastic-ip,Tags=[{Key=Name,Value=fernslop-obs}]'
 ```
 
-Point an A record for the domain (e.g. `obs.example.com`) at it. On Cloudflare: DNS only (grey cloud).
+Point an A record for the domain (e.g. `obs.example.com`) at it. On Cloudflare: DNS only (grey cloud). Create it
+before step 2 and before anything looks the name up. A lookup made before the record exists is cached as "not
+found" for up to 30 minutes, by the app servers and Let's Encrypt too. Until then the apps log `NameResolutionError`
+and their telemetry is dropped. If Caddy failed to get its certificate, it retries on its own, or restart it:
+`docker restart fernslop-observability-caddy-1`.
 
 **2. Create the server.**
 
