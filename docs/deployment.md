@@ -18,14 +18,7 @@ Each environment is one small AWS EC2 server (arm64) in `eu-west-2`. It runs Doc
 - `app`: the Fernslop image, pulled from ECR
 - `db`: PostgreSQL
 
-Everything is defined in CloudFormation templates in [`infra/`](../infra/):
-
-| Stack | Template | What it is |
-| --- | --- | --- |
-| `fernslop-github` | `github-oidc-stack.yaml` | GitHub OIDC login and the deploy roles CI uses (no stored AWS keys) |
-| `fernslop-ecr` | `ecr-stack.yaml` | The image registry and its push role |
-| `fernslop` / `prod-fernslop` | `ec2-stack.yaml` | The dev and prod servers |
-| `fernslop-obs` | `obs-stack.yaml` | The observability server (optional) |
+Everything is defined in CloudFormation in [`infra/`](../infra/): the GitHub login and deploy roles, the image registry, the dev and prod servers, and an optional observability server. The stacks are listed in [`infra/README.md`](../infra/README.md).
 
 ## CI/CD pipeline
 
@@ -57,20 +50,9 @@ Prod uses the same image as dev. Only the environment settings differ.
 
 ## Deploy your own copy
 
-You need an AWS account, a GitHub fork, the `aws` and `gh` CLIs (logged in), and optionally two domain names.
+You need an AWS account, a GitHub fork, the `aws` and `gh` CLIs (logged in), and optionally two domain names. You create two CI stacks, set GitHub variables from their outputs, point DNS at two Elastic IPs and create the servers. After that, every push to `main` deploys to dev.
 
-The full step-by-step guide, with every command, is in [`infra/README.md`](../infra/README.md). In short:
-
-1. Create the two CI stacks (`fernslop-github`, `fernslop-ecr`) with `aws cloudformation deploy`.
-2. Set the GitHub repository and environment variables from their outputs (`development` and `production` environments).
-3. Push to `main` once, so CI builds the first image.
-4. Allocate an Elastic IP per server and point a DNS A record at each.
-5. Create the servers: `infra/deploy.sh dev <tag>` and `infra/deploy.sh prod <tag>`.
-6. Set each environment's `INSTANCE_ID`, `DEPLOY_DOCUMENT` and `PUBLIC_URL` variables in GitHub.
-7. Re-run `deploy-dev`. From then on, every push to `main` deploys to dev.
-8. Optional: create the observability server with `infra/obs-deploy.sh`, then point dev and prod at it.
-
-Rerunning a step is safe: the scripts create a stack, or update it if it exists.
+Every command, in order, is in [`infra/README.md`](../infra/README.md). Rerunning a step is safe: the scripts create a stack, or update it if it exists.
 
 ## Rollback
 

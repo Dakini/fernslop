@@ -9,7 +9,8 @@ uv run --script on-call-engineer/oncall.py --once         # poll once
 uv run --script on-call-engineer/oncall.py --dry-run      # print the agent prompt, start no agent
 ```
 
-No dependencies beyond Python 3.12. The agent CLI must be on `PATH` and logged in.
+No dependencies beyond Python 3.12. The agent CLI must be on `PATH` and logged in. The alert it was built for, and
+how to make it fire locally, are in [`docs/observability.md`](../docs/observability.md).
 
 ## What it does with an alert
 

@@ -130,9 +130,10 @@ If the ECR repository was deleted by hand, stack updates fail with `repository .
 
 ## How a deploy works
 
-- `infra/build.sh` builds the arm64 image and pushes it to ECR as `<repo>:YYYYMMDD-HHMMSS-<sha>`. The tag is baked in, so `/api/health` reports it as `version`. There is no `:latest`. ECR keeps the last 50 tags.
+The overview, from build to promotion, is in [`docs/deployment.md`](../docs/deployment.md#cicd-pipeline). The details:
+
+- `infra/build.sh` builds the image. There is no `:latest` tag. ECR keeps the last 50 tags.
 - Each server stack has an SSM document `<stack name>-deploy` that takes a `tag`, sets `APP_TAG` in `/opt/app/.env` and runs `docker compose up -d --pull always`. CI sends that document; it does not use CloudFormation.
-- `deploy-dev` waits until `/api/health` reports the new tag, smoke-tests `/` and `/api/plants`, then moves the `deployed-dev` git tag, which is what "Promote to prod" deploys. Nothing is rolled back on failure.
 - The deploy document also sets `FERNSLOP_ENVIRONMENT=<dev|prod>` in `/opt/app/app.env` from the stack's `Environment` parameter. The image itself is the same for dev and prod. The backend reports this, together with the image tag, on its OpenTelemetry traces (`backend/app/telemetry.py`).
 - A server created before `FERNSLOP_ENVIRONMENT` existed only gets it after one `infra/deploy.sh <env> <tag>` run, which updates the deploy document. CI deploys after that keep it set.
 - Traces, metrics and logs are only sent when the stack's `OtlpEndpoint` is set (see "Observability server" below). The deploy document then writes the `OTEL_*` variables into `app.env` on every deploy. It is empty by default.

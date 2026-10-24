@@ -85,15 +85,9 @@ make test-all
 | `make test-frontend` | Frontend, Vitest | Components, the services layer, identity and helpers |
 | `make test-e2e` | End to end, Playwright | Real browsers against a throwaway copy of the Docker stack |
 
-The end-to-end suite builds and starts its own stack on a free port, then removes it. A stack started with `make up` is not touched. The first time, install the browser:
-
-```sh
-cd e2e && uv run playwright install chromium
-```
+The first time, install the browser for the end-to-end tests: `cd e2e && uv run playwright install chromium`. How that suite runs, and its options, are in [`e2e/README.md`](../e2e/README.md).
 
 The backend tests use SQLite by default. To run them against Postgres too, set `FERNSLOP_TEST_DATABASE_URL`. Otherwise the 2 Postgres-only tests are skipped.
-
-CI runs all three suites on every pull request and every push to `main`.
 
 ## 5. Configuration
 

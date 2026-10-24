@@ -2,8 +2,6 @@
 
 How Fernslop reports what it is doing, how it raises an alert when users are affected, and how an on-call agent responds.
 
-Detailed references: [`observability/README.md`](../observability/README.md) and [`on-call-engineer/README.md`](../on-call-engineer/README.md).
-
 ## Signals
 
 The backend uses the OpenTelemetry SDK (`backend/app/telemetry.py`). It sends three signals to an OpenTelemetry Collector, which stores each one and makes it viewable in Grafana:
@@ -43,31 +41,19 @@ So the metric, the trace and the log of one search can be followed together.
 
 ## Alerting on user impact
 
-Alerts are provisioned from `observability/grafana/provisioning/alerting/`.
-
 | Alert | Fires when | Why it matters | Runbook |
 | --- | --- | --- | --- |
 | **Plant search term keeps finding nothing** | One search term found no plants more than 4 times in an hour, in one environment and version, for 10 minutes | Several people want a plant the table doesn't have, so they can't add it to their garden | Real plant: add it to `_PLANTS` in `backend/app/seed.py`. Typo or noise: silence the term for a week |
 
-The alert's labels include `owner=product`, `severity=warning`, environment, version and `search_term`. The annotations include a summary, the runbook and a dashboard link.
+Labels, timing and how the rule is provisioned: [`observability/README.md`](../observability/README.md#alerts).
 
 ## On-call agent
 
-`on-call-engineer/oncall.py` polls Grafana's alerts every minute. For each new firing alert:
+`on-call-engineer/oncall.py` polls Grafana's alerts every minute. Each new alert goes to a headless coding agent, in its own git worktree and branch, so your checkout is not touched. The agent follows the runbook. If a code change fixes the alert (for example, adding a missing plant to the seed table), it makes the change and runs the backend tests, and the script commits it to the branch for review. If a person must act, the agent drafts a GitHub issue and the script files it with the label `on-call`.
 
-1. It creates a git worktree on a new branch, `oncall/<fingerprint>-<time>`. Your own checkout is not touched.
-2. It starts a headless coding agent in that worktree, with the alert as data, and tells it to follow the runbook.
-3. The agent investigates. If a code change fixes the alert, it makes the change and runs the backend tests. For example, it adds a missing plant to the seed table.
-4. The script commits the agent's changes to the branch, ready to review and merge.
-5. If a person must act, such as merging or silencing the alert, the agent drafts a GitHub issue. The script files it with the label `on-call`.
-6. A report of each run is written to `on-call-engineer/reports/`.
+The agent can only edit files in its worktree and run the tests. Alert text can contain whatever the public typed, so it is treated as data, never as instructions.
 
-```sh
-uv run --script on-call-engineer/oncall.py           # poll every minute until Ctrl-C
-uv run --script on-call-engineer/oncall.py --once    # poll once
-```
-
-The agent is sandboxed. It can only read and edit files in its worktree and run the tests. It cannot commit, push, use the network or run other commands. Alert text can contain whatever the public typed, so it is treated as data, never as instructions.
+How it works, its commands and settings: [`on-call-engineer/README.md`](../on-call-engineer/README.md).
 
 ## Try it locally
 

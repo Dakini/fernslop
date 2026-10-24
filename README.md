@@ -75,7 +75,7 @@ Stack: React 19, FastAPI, PostgreSQL, Docker Compose, AWS, OpenTelemetry, Grafan
 make test-all
 ```
 
-This runs the backend tests (pytest: unit tests, plus every API route against a real database), the frontend tests (Vitest) and the end-to-end tests (Playwright, two browsers against a throwaway Docker stack). CI runs all three on every pull request. Details are in [Getting started](docs/getting-started.md#4-run-the-tests).
+This runs backend unit and integration tests (pytest), frontend tests (Vitest) and end-to-end tests in real browsers (Playwright). CI runs them on every pull request. What each suite covers: [Getting started](docs/getting-started.md#4-run-the-tests).
 
 ## Deployment
 

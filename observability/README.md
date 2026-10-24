@@ -3,11 +3,8 @@
 A local OpenTelemetry Collector with Tempo (traces), Prometheus (metrics), Loki (logs) and Grafana.
 It is its own Compose project (`fernslop-observability`). Starting or stopping it does not touch the app stack.
 
-```
-app --OTLP--> otel-collector --traces--> Tempo      \
-                             --metrics-> Prometheus  --> Grafana
-                             --logs----> Loki       /
-```
+What each signal records, the key user journey and the privacy rules are in
+[`docs/observability.md`](../docs/observability.md). This page is how to run and change the stack.
 
 ## Run it
 
@@ -66,18 +63,17 @@ would grow without limit. Grafana → Explore → Loki:
 Grafana → Alerting → Alert rules → **Fernslop**. They are provisioned from `grafana/provisioning/alerting/`. No
 contact point is set up, so they show there and are not sent anywhere yet.
 
-- **Plant search term keeps finding nothing**: one search term found no plants more than 4 times in the last hour,
-  in one environment and version, for 10 minutes. Checked every 5 minutes. A miss counts at most once per opening
+- **Plant search term keeps finding nothing** ([what it means](../docs/observability.md#alerting-on-user-impact)):
+  more than 4 misses for one term in an hour, for 10 minutes. Checked every 5 minutes. A miss counts at most once per opening
   of the dialog, so this is several real searches for a plant the table does not have. Labels: `owner=product`,
-  `severity=warning`, `service`, `environment`, `version`, `search_term`. The annotations hold a summary, what to do
-  (add the plant to `_PLANTS` in `backend/app/seed.py`, or silence the term), and `dashboard_url`. That link is
+  `severity=warning`, `service`, `environment`, `version`, `search_term`. The annotations hold a summary, the runbook and
+  `dashboard_url`. That link is
   built from `GF_SERVER_ROOT_URL`, which locally is `http://localhost:3000` (`GRAFANA_ROOT_URL` to change).
 
 ## On a server
 
-`infra/obs-deploy.sh` runs this same stack on its own EC2 instance, which dev and prod send their telemetry to.
-On top of `docker-compose.yaml` it uses `docker-compose.server.yaml`: Caddy with HTTPS in front, a Grafana login,
-and a token for OTLP. See "Observability server" in `infra/README.md`.
+`infra/obs-deploy.sh` runs this same stack on its own EC2 instance, with `docker-compose.server.yaml` on top: Caddy
+with HTTPS, a Grafana login and a token for OTLP. See [Observability server](../infra/README.md#observability-server).
 
 ## Files
 
