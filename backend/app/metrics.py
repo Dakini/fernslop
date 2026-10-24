@@ -6,12 +6,15 @@
   ``http.response.status_code`` (400 bad input, 404 missing room/plant, 409 garden full, 429 rate limited, 500)
 - ``fernslop.garden.participants.active``: distinct devices that changed any garden in the last 15 minutes
   (the frontend sends ``X-Device-Id`` on writes only, so people who only look are not counted)
-- ``fernslop.plant_search.empty``: plant searches with a query that found nothing (the query is not recorded)
+- ``fernslop.plant_search.empty``: plant searches with a query that found nothing. The query is not a metric
+  label (user text would make one series per query); ``record_empty_search`` logs it instead, as ``search.term``
+  on the ``fernslop.search`` logger, which telemetry.py exports as OpenTelemetry logs (Loki)
 
 Created and failed counts come from ``MetricsMiddleware``, keyed on the route's operationId and the response status, so a
 create only counts once its transaction has committed. Instruments are no-ops until ``install`` is called.
 """
 
+import logging
 import threading
 import time
 from collections.abc import Iterable
@@ -27,6 +30,11 @@ MAX_TRACKED_DEVICES = 10_000
 # operationId (openapi.yaml) of the create routes -> the component they create
 CREATE_OPERATIONS = {"createRoom": "garden", "addPlant": "plant", "addArea": "area"}
 WRITE_METHODS = {"POST", "PATCH", "DELETE"}
+SEARCH_TERM_MAX_LENGTH = 100
+
+search_logger = logging.getLogger("fernslop.search")
+# INFO is below the root logger's default WARNING; the empty-search records are the point of this logger
+search_logger.setLevel(logging.INFO)
 
 
 class ActiveDevices:
@@ -67,6 +75,9 @@ class AppMetrics:
         self.empty_plant_searches = meter.create_counter(
             "fernslop.plant_search.empty", unit="{search}", description="Plant searches that found nothing"
         )
+        # Start each series at 0, so Prometheus sees the first garden, plant or empty search as an increase
+        for counter in (self.gardens_created, self.garden_plants_created, self.empty_plant_searches):
+            counter.add(0)
         meter.create_observable_gauge(
             "fernslop.garden.participants.active",
             callbacks=[self._observe_participants],
@@ -89,6 +100,12 @@ def install(provider: MeterProvider) -> None:
 
 def current() -> AppMetrics:
     return _current
+
+
+def record_empty_search(term: str) -> None:
+    """Count a plant search that found nothing and log its (already normalised) term."""
+    current().empty_plant_searches.add(1)
+    search_logger.info("Plant search found nothing", extra={"search.term": term[:SEARCH_TERM_MAX_LENGTH]})
 
 
 def _header(scope: Scope, name: bytes) -> str:

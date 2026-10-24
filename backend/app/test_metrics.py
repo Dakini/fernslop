@@ -63,7 +63,7 @@ def test_failed_plant_create_counts_a_failure_and_no_plant(client, reader):
     assert response.status_code == 404
     failures, _ = _points(reader, "fernslop.component_creation.failures")
     assert failures == [({"component": "plant", "http.response.status_code": 404}, 1)]
-    assert _points(reader, "fernslop.garden_plants.created")[0] == []
+    assert _points(reader, "fernslop.garden_plants.created")[0] == [({}, 0)]
 
 
 def test_only_plant_searches_that_find_nothing_are_counted(client, reader):
@@ -73,6 +73,13 @@ def test_only_plant_searches_that_find_nothing_are_counted(client, reader):
     empty, _ = _points(reader, "fernslop.plant_search.empty")
 
     assert empty == [({}, 1)]
+
+
+def test_empty_plant_search_logs_its_normalised_term(client, caplog):
+    client.get("/api/plants/search", params={"q": "  Purple Kale  "})
+
+    terms = [getattr(record, "search.term") for record in caplog.records if record.name == "fernslop.search"]
+    assert terms == ["purple kale"]
 
 
 def test_active_participants_counts_each_writing_device_once(client, reader):

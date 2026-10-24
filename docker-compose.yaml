@@ -15,16 +15,23 @@ services:
       retries: 10
 
   app:
-    build: .
+    build:
+      context: .
+      args:
+        # The version on the app's telemetry and /api/health; `make up` passes local-<git short sha>
+        FERNSLOP_IMAGE_TAG: ${FERNSLOP_IMAGE_TAG:-}
     restart: unless-stopped
     depends_on:
       db:
         condition: service_healthy
     environment:
       FERNSLOP_DATABASE_URL: postgresql+psycopg://fernslop:${POSTGRES_PASSWORD:-fernslop}@db:5432/fernslop
-      # Nothing is exported unless these are otlp; then to the observability stack (observability/README.md)
+      # Nothing is exported unless these are otlp (`make up` sets them); then to the observability stack
+      # (observability/README.md)
       OTEL_TRACES_EXPORTER: ${OTEL_TRACES_EXPORTER:-none}
       OTEL_METRICS_EXPORTER: ${OTEL_METRICS_EXPORTER:-none}
+      OTEL_LOGS_EXPORTER: ${OTEL_LOGS_EXPORTER:-none}
+      FERNSLOP_ENVIRONMENT: ${FERNSLOP_ENVIRONMENT:-local}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://host.docker.internal:4318}
     extra_hosts:
       # Makes host.docker.internal work on Linux too (Docker Desktop has it already)

@@ -17,19 +17,27 @@ backend-dev:
 test:
 	cd backend && uv run pytest
 
-# Docker compose stack (Postgres + app on http://localhost:8000, override with APP_PORT)
-up:
-	docker compose up -d --build --wait
+# What `make up` builds and exports: the version is local-<git short sha>, and traces, metrics and logs go to the
+# observability stack. Override on the command line, e.g. `make up OTEL_EXPORTER=none`.
+FERNSLOP_IMAGE_TAG ?= local-$(shell git rev-parse --short HEAD)
+OTEL_EXPORTER ?= otlp
+APP_ENV = FERNSLOP_IMAGE_TAG=$(FERNSLOP_IMAGE_TAG) OTEL_TRACES_EXPORTER=$(OTEL_EXPORTER) \
+	OTEL_METRICS_EXPORTER=$(OTEL_EXPORTER) OTEL_LOGS_EXPORTER=$(OTEL_EXPORTER)
 
-# Stop the stack, keep the database volume
-down:
+# Docker compose stack (Postgres + app on http://localhost:8000, override with APP_PORT), plus the observability
+# stack (Grafana on http://localhost:3000) that the app sends its telemetry to
+up: obs-up
+	$(APP_ENV) docker compose up -d --build --wait
+
+# Stop both stacks, keep their data
+down: obs-down
 	docker compose down
 
-# Stop the stack and delete its database volume
-delete:
+# Stop both stacks and delete the app's database volume (the observability data is kept)
+delete: obs-down
 	docker compose down --volumes --remove-orphans
 
-# Observability stack (Collector, Tempo, Loki, Prometheus, Grafana on http://localhost:3000), a separate Compose project
+# Only the observability stack (Collector, Tempo, Loki, Prometheus, Grafana), a separate Compose project
 obs-up:
 	docker compose -f observability/docker-compose.yaml up -d --wait
 

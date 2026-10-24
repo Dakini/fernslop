@@ -11,6 +11,9 @@ app --OTLP--> otel-collector --traces--> Tempo      \
 
 ## Run it
 
+`make up` starts this stack together with the app, and the app sends it traces, metrics and logs. `make down`
+stops both. To run only this stack:
+
 ```sh
 make obs-up      # or: docker compose -f observability/docker-compose.yaml up -d --wait
 make obs-down    # stop, keep data; add --volumes to the compose command to delete it
@@ -26,28 +29,32 @@ All ports are bound to `127.0.0.1`. Tempo, Loki and Prometheus keep 7 days of da
 
 ## Send the app's telemetry to it
 
-The backend only exports when `OTEL_TRACES_EXPORTER` and `OTEL_METRICS_EXPORTER` are set (see `backend/app/telemetry.py`).
+`make up` does this for you: it sets the exporters to `otlp`, `FERNSLOP_ENVIRONMENT` to `local` and the version
+to `local-<git short sha>`. `make up OTEL_EXPORTER=none` turns exporting off.
+
+Otherwise the backend only exports when `OTEL_TRACES_EXPORTER`, `OTEL_METRICS_EXPORTER` and `OTEL_LOGS_EXPORTER`
+are set (see `backend/app/telemetry.py`).
 
 Backend on the host (`make backend`):
 
 ```sh
-OTEL_TRACES_EXPORTER=otlp OTEL_METRICS_EXPORTER=otlp OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 make backend
-```
-
-App container (`make up`): it already points at `http://host.docker.internal:4318`, so set only the exporters:
-
-```sh
-OTEL_TRACES_EXPORTER=otlp OTEL_METRICS_EXPORTER=otlp make up
+OTEL_TRACES_EXPORTER=otlp OTEL_METRICS_EXPORTER=otlp OTEL_LOGS_EXPORTER=otlp \
+  OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 make backend
 ```
 
 Traces: Grafana → Explore → Tempo, search `service.name = fernslop-backend`.
 
 Metrics: the **Fernslop → Fernslop app metrics** dashboard shows gardens created, garden plants created,
-creation failures, active participants and plant searches with no results. The metrics are defined in
-`backend/app/metrics.py` and exported every minute (`OTEL_METRIC_EXPORT_INTERVAL` in ms to change it). Every
-series has `deployment_environment_name` and `service_version` labels.
+creation failures, active participants and plant searches with no results. It also shows how many distinct
+search terms found nothing, and a table of those terms. Filter it by **Environment** and **Deployed version**
+at the top. The metrics are defined in `backend/app/metrics.py` and exported every minute
+(`OTEL_METRIC_EXPORT_INTERVAL` in ms to change it). Every series has `deployment_environment_name` and
+`service_version` labels.
 
-The backend does not send logs yet. The Loki pipeline is ready for them.
+Logs: only empty plant searches are sent, one log line each with the search term (lower-cased, trimmed, at most
+100 characters) as `search_term`. The term is in Loki rather than Prometheus, because one series per term
+would grow without limit. Grafana → Explore → Loki:
+`{service_name="fernslop-backend"} | scope_name="fernslop.search"`.
 
 ## Files
 

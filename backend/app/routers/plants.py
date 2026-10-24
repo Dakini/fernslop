@@ -42,7 +42,7 @@ def search_plants(store: Annotated[StoreProtocol, Depends(get_store)], q: str = 
     )
     found = list(islice(matches, DEFAULT_SEARCH_LIMIT))
     if not found:
-        metrics.current().empty_plant_searches.add(1)
+        metrics.record_empty_search(needle)
     return found
 
 
