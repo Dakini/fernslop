@@ -25,7 +25,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
 STATE_FILE = HERE / "state.json"
-RUNS_DIR = HERE / "runs"
+REPORTS_DIR = HERE / "reports"
 WORKTREES_DIR = HERE / "worktrees"
 
 # Only file tools, plus the backend test suite. No WebFetch/WebSearch and no other shell commands, because the
@@ -147,8 +147,8 @@ def file_issue(issue: dict, alert: dict, branch: str, changed: str, report: Path
 def run_agent(alert: dict, agent_cmd: str, timeout: int, issues: bool) -> None:
     name = alert.get("labels", {}).get("alertname", "alert")
     worktree, branch = make_worktree(alert)
-    RUNS_DIR.mkdir(exist_ok=True)
-    report = RUNS_DIR / f"{worktree.name}.md"
+    REPORTS_DIR.mkdir(exist_ok=True)
+    report = REPORTS_DIR / f"{worktree.name}.md"
     cmd = [
         agent_cmd, "-p", build_prompt(alert),
         "--permission-mode", "dontAsk",

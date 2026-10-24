@@ -22,7 +22,7 @@ No dependencies beyond Python 3.12. The agent CLI must be on `PATH` and logged i
    message. The agent itself cannot commit.
 5. If a person must act (merge the change, silence the alert, fix what the agent could not), the agent drafts a
    GitHub issue and the script files it with `gh`, labelled `on-call`. A failed or timed-out run always gets one.
-6. The report, the changed files, the issue and the alert are written to `runs/<fingerprint>-<time>.md`. The
+6. The report, the changed files, the issue and the alert are written to `reports/<fingerprint>-<time>.md`. The
    script logs that path and the issue URL.
 
 For example, a search term that is a real plant: the agent adds it to `_PLANTS` in `backend/app/seed.py` and runs
@@ -71,4 +71,4 @@ merge.
 | `--interval` | 60 seconds |
 | `--agent-timeout` | 1800 seconds |
 
-`state.json`, `runs/` and `worktrees/` are not checked in.
+`state.json`, `reports/` and `worktrees/` are not checked in.
