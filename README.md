@@ -4,7 +4,7 @@
 
 I wanted an app that reminded me when my plants needed watering or feeding, and showed where everything was. It grew into shared gardens: a family, flatmates or a community group all looking after the same space, from one link, with no accounts.
 
-**Live:** Production: <URL> · Development: <URL>
+**Live:** Production: https://fernslop.dakini-labs.com/ · Development: https://dev-fernslop.dakini-labs.com/
 
 ![A garden with a pond, a veg bed and a herb patch, and its plant list](docs/screenshots/garden-canvas.jpg)
 
